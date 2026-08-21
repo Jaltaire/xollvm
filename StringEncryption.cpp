@@ -12,6 +12,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -1109,10 +1110,12 @@ namespace {
             ArrayType* CtTy;          // CtGV value type
             ArrayType* NonceTy;       // NonceGV value type
             uint64_t CtBytes;
+            bool Persistent;
         };
 
         llvm::MapVector<Function*, SmallVector<CandInj, 4>> ByFn;
         SmallVector<GlobalVariable*, 16> AllCandGVs;
+        Function* RuntimeCtor = nullptr;
 
         for (auto& Cand : Cands) {
             GlobalVariable* GV = Cand.GV;
@@ -1173,6 +1176,35 @@ namespace {
             ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
             const uint64_t CtBytes = CtTy->getNumElements();
 
+            bool HasIndirectUsers = llvm::any_of(GV->users(), [](User* U) {
+                return !isa<Instruction>(U);
+                });
+            if (HasIndirectUsers) {
+                if (!RuntimeCtor) {
+                    FunctionType* CtorTy = FunctionType::get(Type::getVoidTy(C), false);
+                    RuntimeCtor = Function::Create(
+                        CtorTy, GlobalValue::PrivateLinkage,
+                        "__strenc_runtime_init", M);
+                    BasicBlock* Entry = BasicBlock::Create(C, "entry", RuntimeCtor);
+                    IRBuilder<> CtorBuilder(Entry);
+                    CtorBuilder.CreateRetVoid();
+                    appendToGlobalCtors(M, RuntimeCtor, 0);
+                }
+                GlobalVariable* RuntimeGV = new GlobalVariable(
+                    M, CtTy, false, GlobalValue::PrivateLinkage,
+                    ConstantAggregateZero::get(CtTy),
+                    ".strenc.rt." + std::to_string(Cand.Index));
+                RuntimeGV->setSection(strencSection(M, "rt", false));
+                RuntimeGV->setAlignment(Align(16));
+                GV->replaceAllUsesWith(RuntimeGV);
+                ByFn[RuntimeCtor].push_back(CandInj{
+                    RuntimeGV, CtGV, NonceGV, CtTy, NonceTy, CtBytes, true
+                    });
+                AllCandGVs.push_back(GV);
+                ++EncryptedStrings;
+                continue;
+            }
+
             // Find all functions that use this string global
             std::set<Function*> Users;
             for (User* U : GV->users())
@@ -1184,7 +1216,9 @@ namespace {
                 // Skip the stub functions themselves (avoids self-re-encryption)
                 if (F->getName().starts_with("__strenc_")) continue;
 
-                ByFn[F].push_back(CandInj{ GV, CtGV, NonceGV, CtTy, NonceTy, CtBytes });
+                ByFn[F].push_back(CandInj{
+                    GV, CtGV, NonceGV, CtTy, NonceTy, CtBytes, false
+                    });
             }
 
             AllCandGVs.push_back(GV);
@@ -1262,6 +1296,23 @@ namespace {
             // allocas need not be at block top — and is required for
             // dominance: do not re-anchor to entry's insertion point here.
             for (CandInj& ci : CandsForFn) {
+                if (ci.Persistent) {
+                    Value* Dst = gepI8(B, ci.CtTy, ci.GV);
+                    Value* Src = gepI8(B, ci.CtTy, ci.CtGV);
+                    B.CreateMemCpy(Dst, Align(1), Src, Align(1),
+                        ConstantInt::get(I64Ty, ci.CtBytes));
+                    Value* NoncePtr = gepI8(B, ci.NonceTy, ci.NonceGV);
+                    B.CreateCall(ChaChaDecryptFn, {
+                        Dst,
+                        ConstantInt::get(I32Ty, (uint32_t)ci.CtBytes),
+                        KeyPtr,
+                        NoncePtr,
+                        ConstantInt::get(I32Ty, 0)
+                        });
+                    ++DecryptCallsInserted;
+                    Changed = true;
+                    continue;
+                }
                 // alloca [N x i8]  (stack buffer for in-place decryption)
                 AllocaInst* Buf = B.CreateAlloca(ci.CtTy, nullptr, "strenc.buf");
                 Buf->setAlignment(Align(16));

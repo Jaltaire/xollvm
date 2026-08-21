@@ -3,6 +3,7 @@
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,8 @@ target triple = "arm64-apple-macosx14.0.0"
 @c_string = private unnamed_addr constant [9 x i8] c"c-marker\\00"
 @rust_string = private unnamed_addr constant [11 x i8] c"rust-marker"
 @unreachable_string = private unnamed_addr constant [18 x i8] c"unreachable-marker"
+@indirect_string = private unnamed_addr constant [16 x i8] c"indirect-marker!"
+@indirect_descriptor = private constant { ptr, i64 } { ptr @indirect_string, i64 16 }
 
 declare void @consume(ptr, i64)
 
@@ -65,10 +68,33 @@ unreachable:
   ret void
 }
 
+define void @protected_indirect_string() {
+entry:
+  %value = load ptr, ptr @indirect_descriptor
+  call void @consume(ptr %value, i64 16)
+  ret void
+}
+
 define i32 @excluded_function(i32 %value) {
 entry:
   %result = add i32 %value, 7
   ret i32 %result
+}
+"""
+
+RUNTIME_IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+@message = private unnamed_addr constant [16 x i8] c"runtime-marker!\\00"
+@descriptor = private constant { ptr, i64 } { ptr @message, i64 15 }
+
+declare i32 @puts(ptr)
+
+define i32 @main() {
+entry:
+  %value = load ptr, ptr @descriptor
+  %result = call i32 @puts(ptr %value)
+  ret i32 0
 }
 """
 
@@ -89,13 +115,18 @@ class DefaultPolicyTests(unittest.TestCase):
     opt: Path
     plugin: Path
 
-    def run_opt(self, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    @staticmethod
+    def process_environment(environment: dict[str, str]) -> dict[str, str]:
         process_environment = {
             key: value
             for key, value in os.environ.items()
             if key not in POLICY_ENVIRONMENT
         }
         process_environment.update(environment)
+        return process_environment
+
+    def run_opt(self, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        process_environment = self.process_environment(environment)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "input.ll"
@@ -151,8 +182,69 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertNotIn("c-marker", process.stdout)
         self.assertNotIn("rust-marker", process.stdout)
         self.assertNotIn("unreachable-marker", process.stdout)
+        self.assertNotIn("indirect-marker", process.stdout)
         self.assertNotIn('section ".strenc', process.stdout)
         self.assertIn('section "__DATA,__strenc_', process.stdout)
+        self.assertIn("@llvm.global_ctors", process.stdout)
+
+    def test_indirect_string_encryption_preserves_runtime_behavior(self) -> None:
+        environment = self.process_environment(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "strenc(minlen=4,cipher=chacha)",
+                "XOLLVM_DEFAULT_INCLUDE": "^main$",
+                "XOLLVM_VERIFY_IR": "1",
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "runtime.ll"
+            bitcode = root / "runtime.bc"
+            object_file = root / "runtime.o"
+            executable = root / "runtime"
+            source.write_text(RUNTIME_IR)
+            transformed = subprocess.run(
+                [
+                    str(self.opt),
+                    "-load-pass-plugin",
+                    str(self.plugin),
+                    "-passes=obfuscation",
+                    str(source),
+                    "-o",
+                    str(bitcode),
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(transformed.returncode, 0, transformed.stderr)
+            lowered = subprocess.run(
+                [
+                    str(self.opt.parent / "llc"),
+                    "-filetype=obj",
+                    str(bitcode),
+                    "-o",
+                    str(object_file),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(lowered.returncode, 0, lowered.stderr)
+            clang = shutil.which("clang")
+            self.assertIsNotNone(clang)
+            compiled = subprocess.run(
+                [clang, str(object_file), "-o", str(executable)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            executed = subprocess.run(
+                [str(executable)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "runtime-marker!\n")
+            self.assertNotIn(b"runtime-marker", executable.read_bytes())
 
     def test_absent_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({})
