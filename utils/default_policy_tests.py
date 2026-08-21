@@ -18,6 +18,7 @@ target triple = "arm64-apple-macosx14.0.0"
 @unreachable_string = private unnamed_addr constant [18 x i8] c"unreachable-marker"
 @indirect_string = private unnamed_addr constant [16 x i8] c"indirect-marker!"
 @indirect_descriptor = private constant { ptr, i64 } { ptr @indirect_string, i64 16 }
+@address_string = private unnamed_addr constant [15 x i8] c"address-marker!"
 
 declare void @consume(ptr, i64)
 
@@ -75,6 +76,14 @@ entry:
   ret void
 }
 
+define void @protected_address_string() {
+entry:
+  %address = ptrtoint ptr @address_string to i64
+  %value = inttoptr i64 %address to ptr
+  call void @consume(ptr %value, i64 15)
+  ret void
+}
+
 define i32 @excluded_function(i32 %value) {
 entry:
   %result = add i32 %value, 7
@@ -87,6 +96,7 @@ target triple = "arm64-apple-macosx14.0.0"
 
 @message = private unnamed_addr constant [16 x i8] c"runtime-marker!\\00"
 @descriptor = private constant { ptr, i64 } { ptr @message, i64 15 }
+@address_message = private unnamed_addr constant [16 x i8] c"address-marker!\\00"
 
 declare i32 @puts(ptr)
 
@@ -94,6 +104,9 @@ define i32 @main() {
 entry:
   %value = load ptr, ptr @descriptor
   %result = call i32 @puts(ptr %value)
+  %address = ptrtoint ptr @address_message to i64
+  %address_value = inttoptr i64 %address to ptr
+  %address_result = call i32 @puts(ptr %address_value)
   ret i32 0
 }
 """
@@ -183,6 +196,7 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertNotIn("rust-marker", process.stdout)
         self.assertNotIn("unreachable-marker", process.stdout)
         self.assertNotIn("indirect-marker", process.stdout)
+        self.assertNotIn("address-marker", process.stdout)
         self.assertNotIn('section ".strenc', process.stdout)
         self.assertIn('section "__DATA,__strenc_', process.stdout)
         self.assertIn("@llvm.global_ctors", process.stdout)
@@ -243,8 +257,9 @@ class DefaultPolicyTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(executed.returncode, 0, executed.stderr)
-            self.assertEqual(executed.stdout, "runtime-marker!\n")
+            self.assertEqual(executed.stdout, "runtime-marker!\naddress-marker!\n")
             self.assertNotIn(b"runtime-marker", executable.read_bytes())
+            self.assertNotIn(b"address-marker", executable.read_bytes())
 
     def test_absent_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({})

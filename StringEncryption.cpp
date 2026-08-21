@@ -462,12 +462,7 @@ namespace {
 
         // ── Per-string helpers ────────────────────────────────────────────────────
 
-        /// True if GV (or a constexpr derived from it, e.g. a GEP) is ever
-        /// converted to an integer (ptrtoint). Such globals must not be
-        /// encrypted: encryptStrings() rewrites every use of GV inside a
-        /// function to the address of a fresh per-call stack buffer, so a
-        /// captured integer address would silently diverge from the address
-        /// other call sites / the original merged-constant address observe.
+        /// True if GV or a constexpr derived from it is converted to an integer.
         static bool isAddressTakenAsInteger(Constant* C);
 
         /// True if GV should be encrypted (is a non-empty, eligible string).
@@ -729,13 +724,6 @@ namespace {
 
         // Skip printf-style format strings
         if (S.contains('%')) return false;
-
-        // Skip strings whose address is ever captured as an integer: the
-        // encrypted form replaces every use inside a function with a
-        // per-call stack buffer, which has a different (and non-stable)
-        // address than the original global — breaking pointer-identity
-        // code (e.g. rustc string-literal merging + ptrtoint match tables).
-        if (isAddressTakenAsInteger(&GV)) return false;
 
         return true;
     }
@@ -1176,7 +1164,8 @@ namespace {
             ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
             const uint64_t CtBytes = CtTy->getNumElements();
 
-            bool HasIndirectUsers = llvm::any_of(GV->users(), [](User* U) {
+            bool HasIndirectUsers = isAddressTakenAsInteger(GV) ||
+                llvm::any_of(GV->users(), [](User* U) {
                 return !isa<Instruction>(U);
                 });
             if (HasIndirectUsers) {
