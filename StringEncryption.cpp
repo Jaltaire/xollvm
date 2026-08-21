@@ -711,6 +711,7 @@ namespace {
 
     bool StrEncImpl::shouldEncrypt(GlobalVariable& GV, int minLength) {
         if (!GV.hasInitializer() || !GV.isConstant()) return false;
+        if (!GV.hasLocalLinkage()) return false;
         auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
         if (!CDA || !CDA->isString()) return false;
 

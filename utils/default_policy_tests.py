@@ -19,6 +19,7 @@ target triple = "arm64-apple-macosx14.0.0"
 @indirect_string = private unnamed_addr constant [16 x i8] c"indirect-marker!"
 @indirect_descriptor = private constant { ptr, i64 } { ptr @indirect_string, i64 16 }
 @address_string = private unnamed_addr constant [15 x i8] c"address-marker!"
+@external_string = dso_local constant [16 x i8] c"external-marker!"
 
 declare void @consume(ptr, i64)
 
@@ -197,6 +198,7 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertNotIn("unreachable-marker", process.stdout)
         self.assertNotIn("indirect-marker", process.stdout)
         self.assertNotIn("address-marker", process.stdout)
+        self.assertIn("external-marker", process.stdout)
         self.assertNotIn('section ".strenc', process.stdout)
         self.assertIn('section "__DATA,__strenc_', process.stdout)
         self.assertIn("@llvm.global_ctors", process.stdout)
