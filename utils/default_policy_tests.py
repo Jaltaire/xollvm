@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -134,6 +135,7 @@ POLICY_ENVIRONMENT = {
     "XOLLVM_VERIFY_IR",
     "XOLLVM_RANDOMIZE_ADEC_CONSTANTS",
     "XOLLVM_ADEC_PREFIX",
+    "XOLLVM_REPORT_JSON",
 }
 
 
@@ -422,6 +424,19 @@ class DefaultPolicyTests(unittest.TestCase):
             "add i32 %value, 7",
             self.function_body(process.stdout, "protected_function"),
         )
+
+    def test_environment_report_path_writes_a_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "report.json"
+            process = self.run_opt(
+                {
+                    "XOLLVM_DEFAULT_CONFIG": "constenc",
+                    "XOLLVM_REPORT_JSON": str(report),
+                }
+            )
+            self.assertEqual(process.returncode, 0, process.stderr)
+            payload = json.loads(report.read_text())
+            self.assertIn("functions", payload)
 
     def test_invalid_environment_number_is_rejected(self) -> None:
         process = self.run_opt(

@@ -83,6 +83,8 @@ void llvm::ApplyObfuscationEnvironment() {
 		ADecRandomizeConsts = environmentBoolean("XOLLVM_RANDOMIZE_ADEC_CONSTANTS", value);
 	if (const char* value = environmentValue("XOLLVM_ADEC_PREFIX"))
 		ADecPrefix = value;
+	if (const char* value = environmentValue("XOLLVM_REPORT_JSON"))
+		ObfReportJson = value;
 }
 
 cl::opt<bool> llvm::ObfSeedManifest(
