@@ -77,6 +77,7 @@ POLICY_ENVIRONMENT = {
     "XOLLVM_DEFAULT_INCLUDE",
     "XOLLVM_DEFAULT_EXCLUDE",
     "XOLLVM_IR_BUDGET_MULTIPLIER",
+    "XOLLVM_IR_BUDGET_MAX",
     "XOLLVM_MAX_FUNCTION_INSTRUCTIONS",
     "XOLLVM_VERIFY_IR",
     "XOLLVM_RANDOMIZE_ADEC_CONSTANTS",
@@ -201,6 +202,19 @@ class DefaultPolicyTests(unittest.TestCase):
         body = self.function_body(process.stdout, "protected_cross_block")
         self.assertIn("br label %exit", body)
         self.assertNotIn("fla.dispatch", body)
+
+    def test_absolute_ir_budget_ceiling_stops_function_growth(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "constenc(prob=100,minAbs=1,maxSites=16)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "100",
+                "XOLLVM_IR_BUDGET_MAX": "1",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_function")
+        self.assertIn("add i32 %value, 7", body)
 
     def test_empty_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({"XOLLVM_DEFAULT_CONFIG": ""})

@@ -66,6 +66,8 @@ void llvm::ApplyObfuscationEnvironment() {
 		ObfDefaultExclude = value;
 	if (const char* value = environmentValue("XOLLVM_IR_BUDGET_MULTIPLIER"))
 		ObfIRBudgetMultiplier = environmentUnsigned("XOLLVM_IR_BUDGET_MULTIPLIER", value);
+	if (const char* value = environmentValue("XOLLVM_IR_BUDGET_MAX"))
+		ObfIRBudgetMax = environmentUnsigned("XOLLVM_IR_BUDGET_MAX", value);
 	if (const char* value = environmentValue("XOLLVM_MAX_FUNCTION_INSTRUCTIONS"))
 		ObfMaxFunctionInsts = environmentUnsigned("XOLLVM_MAX_FUNCTION_INSTRUCTIONS", value);
 	if (const char* value = environmentValue("XOLLVM_VERIFY_IR"))
