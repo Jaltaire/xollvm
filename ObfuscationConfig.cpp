@@ -6,6 +6,7 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
 
 #include "llvm/IR/Function.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
@@ -211,28 +212,54 @@ ObfuscationConfig AnnotationParser::parseAnnotations(Function* F) {
 	std::vector<std::string> annotations = llvm::obf::readAnnotations(F);
 
 	if (annotations.empty()) {
-		if (ObfDefaultConfig.empty())
-			return finalConfig;
-
-		Regex includeRegex(ObfDefaultInclude);
-		std::string regexError;
-		if (!includeRegex.isValid(regexError))
-			report_fatal_error(Twine("Invalid -obf-default-include regular expression: ") + regexError,
-				false);
-
-		if (!includeRegex.match(F->getName()))
-			return finalConfig;
-
-		if (!ObfDefaultExclude.empty()) {
-			Regex excludeRegex(ObfDefaultExclude);
-			if (!excludeRegex.isValid(regexError))
-				report_fatal_error(Twine("Invalid -obf-default-exclude regular expression: ") + regexError,
+		if (!ObfDefaultConfig.empty()) {
+			Regex includeRegex(ObfDefaultInclude);
+			std::string regexError;
+			if (!includeRegex.isValid(regexError))
+				report_fatal_error(Twine("Invalid -obf-default-include regular expression: ") + regexError,
 					false);
-			if (excludeRegex.match(F->getName()))
-				return finalConfig;
-		}
 
-		annotations.push_back(ObfDefaultConfig);
+			bool selected = includeRegex.match(F->getName());
+			if (selected && !ObfDefaultExclude.empty()) {
+				Regex excludeRegex(ObfDefaultExclude);
+				if (!excludeRegex.isValid(regexError))
+					report_fatal_error(Twine("Invalid -obf-default-exclude regular expression: ") + regexError,
+						false);
+				selected = !excludeRegex.match(F->getName());
+			}
+			if (selected)
+				annotations.push_back(ObfDefaultConfig);
+		}
+	}
+
+	if (!ObfFunctionRules.empty()) {
+		SmallVector<StringRef, 8> rules;
+		StringRef(ObfFunctionRules).split(rules, '\n', -1, false);
+		for (StringRef rule : rules) {
+			auto modeSeparator = rule.find('\t');
+			auto expressionSeparator = modeSeparator == StringRef::npos
+				? StringRef::npos
+				: rule.find('\t', modeSeparator + 1);
+			if (modeSeparator == StringRef::npos || modeSeparator == 0 ||
+				expressionSeparator == StringRef::npos || expressionSeparator == modeSeparator + 1 ||
+				expressionSeparator + 1 >= rule.size())
+				report_fatal_error("Invalid -obf-function-rules entry.", false);
+			StringRef mode = rule.take_front(modeSeparator);
+			StringRef expression = rule.slice(modeSeparator + 1, expressionSeparator);
+			StringRef specification = rule.drop_front(expressionSeparator + 1);
+			if (mode != "merge" && mode != "replace")
+				report_fatal_error("Invalid -obf-function-rules mode.", false);
+			Regex regex(expression);
+			std::string regexError;
+			if (!regex.isValid(regexError))
+				report_fatal_error(Twine("Invalid -obf-function-rules regular expression: ") + regexError,
+					false);
+			if (regex.match(F->getName())) {
+				if (mode == "replace")
+					annotations.clear();
+				annotations.push_back(specification.str());
+			}
+		}
 	}
 
 	if (ObfVerbose) {

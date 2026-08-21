@@ -196,7 +196,9 @@ clang test.c -O2 \
 ```
 
 LLVM hosts that load pass plugins after parsing their own command line can provide the same values
-through `XOLLVM_DEFAULT_CONFIG`, `XOLLVM_DEFAULT_INCLUDE`, and `XOLLVM_DEFAULT_EXCLUDE`. The plugin
+through `XOLLVM_DEFAULT_CONFIG`, `XOLLVM_DEFAULT_INCLUDE`, and `XOLLVM_DEFAULT_EXCLUDE`. Selective
+rules can be supplied through `XOLLVM_FUNCTION_RULES` as newline-separated
+`<merge-or-replace><TAB><function-regex><TAB><specification>` entries. The plugin
 also accepts `XOLLVM_IR_BUDGET_MULTIPLIER`, `XOLLVM_MAX_FUNCTION_INSTRUCTIONS`, `XOLLVM_VERIFY_IR`,
 `XOLLVM_RANDOMIZE_ADEC_CONSTANTS`, and `XOLLVM_ADEC_PREFIX` for the corresponding global settings.
 

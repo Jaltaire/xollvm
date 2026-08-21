@@ -33,6 +33,11 @@ cl::opt<std::string> llvm::ObfDefaultExclude(
 	cl::desc("Regular expression excluding functions from the default configuration."),
 	cl::init(""));
 
+cl::opt<std::string> llvm::ObfFunctionRules(
+	"obf-function-rules",
+	cl::desc("Newline-separated function-rule mode, regular expression, and specification triples."),
+	cl::init(""));
+
 namespace {
 	const char* environmentValue(const char* name) {
 		const char* value = std::getenv(name);
@@ -64,6 +69,8 @@ void llvm::ApplyObfuscationEnvironment() {
 		ObfDefaultInclude = value;
 	if (const char* value = environmentValue("XOLLVM_DEFAULT_EXCLUDE"))
 		ObfDefaultExclude = value;
+	if (const char* value = environmentValue("XOLLVM_FUNCTION_RULES"))
+		ObfFunctionRules = value;
 	if (const char* value = environmentValue("XOLLVM_IR_BUDGET_MULTIPLIER"))
 		ObfIRBudgetMultiplier = environmentUnsigned("XOLLVM_IR_BUDGET_MULTIPLIER", value);
 	if (const char* value = environmentValue("XOLLVM_IR_BUDGET_MAX"))

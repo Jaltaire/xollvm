@@ -127,6 +127,7 @@ POLICY_ENVIRONMENT = {
     "XOLLVM_DEFAULT_CONFIG",
     "XOLLVM_DEFAULT_INCLUDE",
     "XOLLVM_DEFAULT_EXCLUDE",
+    "XOLLVM_FUNCTION_RULES",
     "XOLLVM_IR_BUDGET_MULTIPLIER",
     "XOLLVM_IR_BUDGET_MAX",
     "XOLLVM_MAX_FUNCTION_INSTRUCTIONS",
@@ -308,6 +309,57 @@ class DefaultPolicyTests(unittest.TestCase):
             "add i32 %value, 7",
             self.function_body(process.stdout, "protected_function"),
         )
+
+    def test_function_rule_replaces_a_conflicting_default_policy(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "mba(prob=100),flattening(minBlocks=2,maxBlocks=100)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_",
+                "XOLLVM_FUNCTION_RULES": (
+                    "replace\t^protected_function$\tvm(preset=high)"
+                ),
+                "XOLLVM_VERIFY_IR": "1",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        replaced = self.function_body(process.stdout, "protected_function")
+        defaulted = self.function_body(process.stdout, "protected_large_cfg")
+        self.assertNotIn("add i32 %value, 7", replaced)
+        self.assertIn("__vm_", process.stdout)
+        self.assertNotIn("br i1 %condition, label %left, label %right", defaulted)
+
+    def test_function_rule_merges_with_the_default_policy(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "constenc(prob=100,minAbs=1,maxSites=16)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_FUNCTION_RULES": (
+                    "merge\t^protected_function$\tmba(prob=100,maxSites=16)"
+                ),
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_function")
+        self.assertNotIn("add i32 %value, 7", body)
+        self.assertIn("obf.constenc", process.stdout)
+
+    def test_invalid_function_rules_are_rejected(self) -> None:
+        for rule, message in [
+            ("invalid", "Invalid -obf-function-rules entry"),
+            ("unknown\tprotected\tvm", "Invalid -obf-function-rules mode"),
+            ("replace\t[\tvm", "Invalid -obf-function-rules regular expression"),
+        ]:
+            with self.subTest(rule=rule):
+                process = self.run_opt(
+                    {
+                        "XOLLVM_DEFAULT_CONFIG": "constenc",
+                        "XOLLVM_FUNCTION_RULES": rule,
+                    }
+                )
+                self.assertNotEqual(process.returncode, 0)
+                self.assertIn(message, process.stderr)
 
     def test_flattening_instruction_ceiling_skips_large_functions(self) -> None:
         process = self.run_opt(

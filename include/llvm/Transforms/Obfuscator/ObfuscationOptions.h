@@ -13,6 +13,7 @@ namespace llvm {
 	extern llvm::cl::opt<std::string> ObfDefaultConfig;
 	extern llvm::cl::opt<std::string> ObfDefaultInclude;
 	extern llvm::cl::opt<std::string> ObfDefaultExclude;
+	extern llvm::cl::opt<std::string> ObfFunctionRules;
 	void ApplyObfuscationEnvironment();
 
 
