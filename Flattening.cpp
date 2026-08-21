@@ -468,6 +468,12 @@ namespace {
 			return false;
 		}
 
+		if (Cfg.MaxInstructions != 0 && Ctx.NumInsts > Cfg.MaxInstructions) {
+			if (Reason)
+				*Reason << "too many instructions";
+			return false;
+		}
+
 
 		// ── Reject funclet-based EH (Windows SEH / WinEH) ────────────
 		// The Windows OS unwinder relies on .xdata/.pdata tables that map
@@ -1486,7 +1492,12 @@ namespace {
 
 		// Strategy: local reg2mem for CFG safety, then mem2reg after flattening.
 		llvm::SmallVector<llvm::AllocaInst*, 64> DemotedAllocas;
-		llvm::obf::demoteForCFGChange(F, DemotedAllocas);
+		llvm::obf::CFGDemotionResult Demotion = llvm::obf::demoteForCFGChange(
+			F, DemotedAllocas, PCtx.Cfg.MaxDemotionRounds);
+		if (Demotion == llvm::obf::CFGDemotionResult::DidNotConverge) {
+			llvm::obf::promoteDemotedAllocas(F, DemotedAllocas);
+			return false;
+		}
 
 		if (!prepareFlattening(PCtx)) {
 			// Restore SSA — we demoted above but built nothing.

@@ -24,6 +24,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
@@ -51,6 +52,28 @@ ALWAYS_ENABLED_STATISTIC(StubLinked, "Times AES stub module was linked");
 
 
 namespace {
+    std::string strencSection(const Module& M, StringRef kind, bool text) {
+        Triple target(M.getTargetTriple());
+        if (target.isOSBinFormatMachO())
+            return (Twine(text ? "__TEXT,__strenc_" : "__DATA,__strenc_") + kind).str();
+        if (target.isOSBinFormatCOFF())
+            return (Twine(".strenc$") + kind).str();
+        return (Twine(".strenc.") + kind).str();
+    }
+
+    bool isStrencSection(StringRef section) {
+        return section.starts_with(".strenc") ||
+            section.starts_with("__DATA,__strenc_") ||
+            section.starts_with("__TEXT,__strenc_");
+    }
+
+    Function* owningFunction(User* user) {
+        auto* instruction = dyn_cast<Instruction>(user);
+        if (!instruction) return nullptr;
+        BasicBlock* block = instruction->getParent();
+        return block ? block->getParent() : nullptr;
+    }
+
 
     // ============================================================================
     // Compile-time AES-128 engine
@@ -569,7 +592,7 @@ namespace {
         // Mark all strenc-private globals the same way.
         for (GlobalVariable& GV : M.globals()) {
             StringRef Sec = GV.hasSection() ? GV.getSection() : StringRef();
-            if (Sec.starts_with(".strenc"))
+            if (isStrencSection(Sec))
                 GV.setVisibility(GlobalValue::HiddenVisibility);
         }
     }
@@ -592,7 +615,7 @@ namespace {
             ConstantArray::get(Ty, Bytes),
             ".strenc.kd");
 
-        GV->setSection(".strenc.kd");
+        GV->setSection(strencSection(M, "kd", false));
         GV->setAlignment(Align(16));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -656,7 +679,7 @@ namespace {
 
         F->setLinkage(GlobalValue::PrivateLinkage);
         F->addFnAttr(Attribute::NoUnwind);
-        F->setSection(".strenc.kt");
+        F->setSection(strencSection(M, "kt", true));
         F->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
 
         Argument* OutArg = F->getArg(0);
@@ -693,14 +716,15 @@ namespace {
     bool StrEncImpl::shouldEncrypt(GlobalVariable& GV, int minLength) {
         if (!GV.hasInitializer() || !GV.isConstant()) return false;
         auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
-        if (!CDA || !CDA->isCString()) return false;
+        if (!CDA || !CDA->isString()) return false;
 
         // Skip stub-owned globals (section starts with ".strenc")
-        if (GV.hasSection() && GV.getSection().starts_with(".strenc"))
+        if (GV.hasSection() && isStrencSection(GV.getSection()))
             return false;
 
-        StringRef S = CDA->getAsCString();
-        if ((int)S.size() < minLength) return false;
+        StringRef S = CDA->getAsString();
+        size_t ContentLength = CDA->isCString() ? CDA->getAsCString().size() : S.size();
+        if ((int)ContentLength < minLength) return false;
 
         // Skip printf-style format strings
         if (S.contains('%')) return false;
@@ -719,14 +743,13 @@ namespace {
         const std::string& cipher,
         unsigned idx) {
         LLVMContext& C = M.getContext();
-        size_t N = cipher.size() + 1;  // include null terminator byte
+        size_t N = cipher.size();
         ArrayType* Ty = ArrayType::get(Type::getInt8Ty(C), N);
 
         std::vector<Constant*> Bytes;
         Bytes.reserve(N);
         for (unsigned char c : cipher)
             Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), c));
-        Bytes.push_back(ConstantInt::get(Type::getInt8Ty(C), 0)); // null terminator
 
         std::string Name = ".strenc.ct." + std::to_string(idx);
         GlobalVariable* GV = new GlobalVariable(
@@ -735,7 +758,7 @@ namespace {
             ConstantArray::get(Ty, Bytes),
             Name);
 
-        GV->setSection(".strenc.ct");
+        GV->setSection(strencSection(M, "ct", false));
         GV->setAlignment(Align(1));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -760,7 +783,7 @@ namespace {
             ConstantArray::get(Ty, Bytes),
             Name);
 
-        GV->setSection(".strenc.n");
+        GV->setSection(strencSection(M, "n", false));
         GV->setAlignment(Align(8));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -784,7 +807,7 @@ namespace {
             ConstantArray::get(Ty, Bytes),
             Name);
 
-        GV->setSection(".strenc.n");
+        GV->setSection(strencSection(M, "n", false));
         GV->setAlignment(Align(8));
         GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
         return GV;
@@ -867,7 +890,7 @@ namespace {
             if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
             auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
             if (!CDA || !CDA->isString()) continue;
-            Cands.push_back({ &GV, CDA->getAsCString().str(), idx++ });
+            Cands.push_back({ &GV, CDA->getAsString().str(), idx++ });
         }
 
         if (Cands.empty()) return false;
@@ -902,13 +925,13 @@ namespace {
 
             ArrayType* CtTy = cast<ArrayType>(CtGV->getValueType());
             ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
-            const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
+            const uint64_t CtBytes = CtTy->getNumElements();
 
             // Find all functions that use this string global
             std::set<Function*> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (Function* F = owningFunction(U))
+                    Users.insert(F);
 
             // inject decryption at each using function's entry ──────
             for (Function* F : Users) {
@@ -932,11 +955,9 @@ namespace {
                 // ptr to nonce
                 Value* NcPtr = gepI8(B, NonceTy, NonceGV);
 
-                // call __strenc_decrypt(buf_ptr, plaintext_len, nonce_ptr)
-                // Note: len = CtBytes - 1 (exclude null terminator)
                 B.CreateCall(DecryptFn, {
                     Dst,
-                    ConstantInt::get(I32Ty, (uint32_t)(CtBytes - 1)),
+                    ConstantInt::get(I32Ty, (uint32_t)CtBytes),
                     NcPtr
                     });
 
@@ -944,7 +965,7 @@ namespace {
                 // Buf and GV both have type 'ptr' in opaque-pointer mode.
                 for (User* U : make_early_inc_range(GV->users())) {
                     auto* I = dyn_cast<Instruction>(U);
-                    if (!I || I->getFunction() != F) continue;
+                    if (!I || owningFunction(I) != F) continue;
                     I->replaceUsesOfWith(GV, Buf);
                 }
 
@@ -1031,7 +1052,7 @@ namespace {
             if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
             auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
             if (!CDA || !CDA->isString()) continue;
-            Cands.push_back({ &GV, CDA->getAsCString().str(), idx++ });
+            Cands.push_back({ &GV, CDA->getAsString().str(), idx++ });
         }
 
         if (Cands.empty()) return false;
@@ -1087,7 +1108,7 @@ namespace {
             GlobalVariable* NonceGV;  // 12-byte nonce global
             ArrayType* CtTy;          // CtGV value type
             ArrayType* NonceTy;       // NonceGV value type
-            uint64_t CtBytes;         // CtTy->getNumElements() (plaintext len + 1)
+            uint64_t CtBytes;
         };
 
         llvm::MapVector<Function*, SmallVector<CandInj, 4>> ByFn;
@@ -1143,20 +1164,20 @@ namespace {
                     GlobalValue::PrivateLinkage,
                     ConstantArray::get(KeyTy, KeyBytes),
                     ".strenc.ck");
-                Ctx.ChaChaKeyGV->setSection(".strenc.ck");
+                Ctx.ChaChaKeyGV->setSection(strencSection(M, "ck", false));
                 Ctx.ChaChaKeyGV->setAlignment(Align(16));
                 Ctx.ChaChaKeyGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
             }
 
             ArrayType* CtTy = cast<ArrayType>(CtGV->getValueType());
             ArrayType* NonceTy = cast<ArrayType>(NonceGV->getValueType());
-            const uint64_t CtBytes = CtTy->getNumElements();  // plaintext len + 1
+            const uint64_t CtBytes = CtTy->getNumElements();
 
             // Find all functions that use this string global
             std::set<Function*> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (Function* F = owningFunction(U))
+                    Users.insert(F);
 
             for (Function* F : Users) {
                 if (!F || F->isDeclaration()) continue;
@@ -1251,7 +1272,7 @@ namespace {
                 SmallVector<Instruction*, 8> Uses;
                 for (User* U : ci.GV->users())
                     if (auto* I = dyn_cast<Instruction>(U))
-                        if (I->getFunction() == F) Uses.push_back(I);
+                        if (owningFunction(I) == F) Uses.push_back(I);
 
                 // Fallback conditions: reproduce current (Phase C) behavior —
                 // materialize at entry, no scrub — whenever lazy placement
@@ -1274,8 +1295,13 @@ namespace {
                 BasicBlock* NCD = nullptr;
                 if (!NeedsFallback) {
                     NCD = Uses[0]->getParent();
-                    for (Instruction* U : Uses)
+                    for (Instruction* U : Uses) {
+                        if (!DT.getNode(NCD) || !DT.getNode(U->getParent())) {
+                            NeedsFallback = true;
+                            break;
+                        }
                         NCD = DT.findNearestCommonDominator(NCD, U->getParent());
+                    }
                     if (!NCD) NeedsFallback = true;
                 }
 
@@ -1293,7 +1319,7 @@ namespace {
 
                     DecCall = B.CreateCall(ChaChaDecryptFn, {
                         Dst,
-                        ConstantInt::get(I32Ty, (uint32_t)(ci.CtBytes - 1)),
+                        ConstantInt::get(I32Ty, (uint32_t)ci.CtBytes),
                         KeyPtr,
                         NoncePtr,
                         ConstantInt::get(I32Ty, 0)
@@ -1320,7 +1346,7 @@ namespace {
 
                     DecCall = MB.CreateCall(ChaChaDecryptFn, {
                         Dst,
-                        ConstantInt::get(I32Ty, (uint32_t)(ci.CtBytes - 1)),
+                        ConstantInt::get(I32Ty, (uint32_t)ci.CtBytes),
                         KeyPtr,
                         NoncePtr,
                         ConstantInt::get(I32Ty, 0)
@@ -1333,7 +1359,7 @@ namespace {
                 // Buf and GV both have type 'ptr' in opaque-pointer mode.
                 for (User* U : make_early_inc_range(ci.GV->users())) {
                     auto* I = dyn_cast<Instruction>(U);
-                    if (!I || I->getFunction() != F) continue;
+                    if (!I || owningFunction(I) != F) continue;
                     I->replaceUsesOfWith(ci.GV, Buf);
                 }
 
@@ -1500,7 +1526,7 @@ namespace {
             if (!CDA || !CDA->isString()) continue;
             uint8_t K = (uint8_t)(Ctx.KeyRng.u32() & 0xFF);
             if (!K) K = 42;
-            ToEnc.emplace_back(&GV, K, CDA->getAsCString().str());
+            ToEnc.emplace_back(&GV, K, CDA->getAsString().str());
         }
         if (ToEnc.empty()) return false;
 
@@ -1511,7 +1537,6 @@ namespace {
             std::vector<Constant*> Enc;
             for (char ch : Str)
                 Enc.push_back(ConstantInt::get(I8Ty, (uint8_t)ch ^ Key));
-            Enc.push_back(ConstantInt::get(I8Ty, 0));
 
             ArrayType* ArrTy = ArrayType::get(I8Ty, Enc.size());
             auto* EncGV = new GlobalVariable(M, ArrTy, true,
@@ -1522,8 +1547,8 @@ namespace {
 
             std::set<Function*> Users;
             for (User* U : GV->users())
-                if (auto* I = dyn_cast<Instruction>(U))
-                    Users.insert(I->getFunction());
+                if (Function* F = owningFunction(U))
+                    Users.insert(F);
 
             for (Function* F : Users) {
                 if (!F || F->isDeclaration()) continue;
@@ -1544,7 +1569,7 @@ namespace {
 
                 for (User* U : make_early_inc_range(GV->users())) {
                     auto* I = dyn_cast<Instruction>(U);
-                    if (!I || I->getFunction() != F) continue;
+                    if (!I || owningFunction(I) != F) continue;
                     I->replaceUsesOfWith(GV, Buf);
                 }
                 ++DecryptCallsInserted;

@@ -48,7 +48,14 @@ namespace llvm::obf {
 	// - Demotes PHIs + escaping regs into fresh entry allocas.
 	// - Adds an entry initialization store (null) for each new alloca to prevent undef/UB on "imaginary" CFG paths.
 	// - Returns the list of newly created allocas so the caller can mem2reg them after CFG rewrite.
-	bool demoteForCFGChange(llvm::Function& F, llvm::SmallVectorImpl<llvm::AllocaInst*>& OutNewAllocas);
+	enum class CFGDemotionResult {
+		Unchanged,
+		Changed,
+		DidNotConverge,
+	};
+	CFGDemotionResult demoteForCFGChange(llvm::Function& F,
+		llvm::SmallVectorImpl<llvm::AllocaInst*>& OutNewAllocas,
+		unsigned MaxRounds);
 	bool promoteDemotedAllocas(llvm::Function& F, llvm::ArrayRef<llvm::AllocaInst*> NewAllocas);
 
 
@@ -77,4 +84,3 @@ namespace llvm::obf {
 
 
 } // namespace llvm::obf
-

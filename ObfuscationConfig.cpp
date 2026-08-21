@@ -401,6 +401,10 @@ FlatteningConfig FlatteningConfig::fromPassConfig(const PassConfig& pc) {
 	try {
 		if (P.count("minblocks")) getU("minblocks", cfg.MinBlocks);
 		if (P.count("maxblocks")) getU("maxblocks", cfg.MaxBlocks);
+		if (P.count("maxinstructions")) getU("maxinstructions", cfg.MaxInstructions);
+		if (P.count("maxinsts")) getU("maxinsts", cfg.MaxInstructions);
+		if (P.count("maxdemotionrounds")) getU("maxdemotionrounds", cfg.MaxDemotionRounds);
+		if (P.count("maxdemoterounds")) getU("maxdemoterounds", cfg.MaxDemotionRounds);
 
 		// Aliases
 		if (P.count("min")) getU("min", cfg.MinBlocks);
@@ -458,6 +462,16 @@ bool FlatteningConfig::validate() const {
 	if (MaxBlocks < MinBlocks || MaxBlocks > 200000) {
 		errs() << "Flattening: Invalid MaxBlocks " << MaxBlocks
 			<< " (must be >= MinBlocks and <= 200000)\n";
+		return false;
+	}
+
+	if (MaxInstructions > 1000000) {
+		errs() << "Flattening: MaxInstructions must not exceed 1000000.\n";
+		return false;
+	}
+
+	if (MaxDemotionRounds > 1024) {
+		errs() << "Flattening: MaxDemotionRounds must not exceed 1024.\n";
 		return false;
 	}
 

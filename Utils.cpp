@@ -355,9 +355,11 @@ namespace llvm::obf {
 		return false;
 	}
 
-	bool demoteForCFGChange(llvm::Function& F, llvm::SmallVectorImpl<llvm::AllocaInst*>& OutNewAllocas) {
+	CFGDemotionResult demoteForCFGChange(llvm::Function& F,
+		llvm::SmallVectorImpl<llvm::AllocaInst*>& OutNewAllocas,
+		unsigned MaxRounds) {
 		if (F.isDeclaration())
-			return false;
+			return CFGDemotionResult::Unchanged;
 
 		llvm::BasicBlock& Entry = F.getEntryBlock();
 		llvm::Instruction* AllocaIP = llvm::obf::getAllocaIP(F);
@@ -373,8 +375,10 @@ namespace llvm::obf {
 		std::vector<llvm::PHINode*> TmpPhi;
 		std::vector<llvm::Instruction*> TmpReg;
 		bool Changed = false;
+		bool Converged = true;
+		unsigned Round = 0;
 
-		do {
+		while (true) {
 			TmpPhi.clear();
 			TmpReg.clear();
 
@@ -406,6 +410,14 @@ namespace llvm::obf {
 				}
 			}
 
+			if (TmpReg.empty() && TmpPhi.empty())
+				break;
+			if (Round == MaxRounds) {
+				Converged = false;
+				break;
+			}
+			++Round;
+
 			for (llvm::Instruction* I : TmpReg) {
 				// Avoid trying to demote already-deleted instructions in case of cascades.
 				if (!I || I->getParent() == nullptr)
@@ -422,7 +434,7 @@ namespace llvm::obf {
 				Changed = true;
 			}
 
-		} while (!TmpReg.empty() || !TmpPhi.empty());
+		}
 
 		// Collect newly created allocas
 		llvm::SmallPtrSet<llvm::AllocaInst*, 32> Seen;
@@ -440,21 +452,25 @@ namespace llvm::obf {
 			OutNewAllocas.push_back(AI);
 		}
 
-		// IMPORTANT: initialize new allocas in entry so promotion doesn't introduce undef/UB
-		// on "imaginary" flattened CFG paths.
-		for (llvm::AllocaInst* AI : OutNewAllocas) {
-			if (!AI || AI->getParent() != &Entry)
-				continue;
-			llvm::Type* Ty = AI->getAllocatedType();
-			if (!Ty || !Ty->isSized())
-				continue;
-			llvm::Instruction* IP = AI->getNextNode();
-			if (!IP) IP = Entry.getTerminator();
-			llvm::IRBuilder<> B(IP);
-			B.CreateStore(llvm::Constant::getNullValue(Ty), AI);
+		if (Converged) {
+			// IMPORTANT: initialize new allocas in entry so promotion doesn't introduce undef/UB
+			// on "imaginary" flattened CFG paths.
+			for (llvm::AllocaInst* AI : OutNewAllocas) {
+				if (!AI || AI->getParent() != &Entry)
+					continue;
+				llvm::Type* Ty = AI->getAllocatedType();
+				if (!Ty || !Ty->isSized())
+					continue;
+				llvm::Instruction* IP = AI->getNextNode();
+				if (!IP) IP = Entry.getTerminator();
+				llvm::IRBuilder<> B(IP);
+				B.CreateStore(llvm::Constant::getNullValue(Ty), AI);
+			}
 		}
 
-		return Changed;
+		if (!Converged)
+			return CFGDemotionResult::DidNotConverge;
+		return Changed ? CFGDemotionResult::Changed : CFGDemotionResult::Unchanged;
 	}
 
 	// Strict subset of mem2reg-promotable allocas (chosen to avoid any chance of asserting).

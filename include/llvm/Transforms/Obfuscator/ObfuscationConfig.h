@@ -76,6 +76,8 @@ namespace llvm {
 		bool enable = false;
 		unsigned MinBlocks = 3;
 		unsigned MaxBlocks = 200;
+		unsigned MaxInstructions = 0;
+		unsigned MaxDemotionRounds = 32;
 		bool AllowIndirect = false;
 		bool Hybrid = true;
 		// If true: state updates are stored as opaque expressions (volatile anchored),
@@ -387,4 +389,3 @@ namespace llvm {
 
 
 } // namespace llvm
-

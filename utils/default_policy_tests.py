@@ -10,10 +10,59 @@ from pathlib import Path
 
 
 IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+@c_string = private unnamed_addr constant [9 x i8] c"c-marker\\00"
+@rust_string = private unnamed_addr constant [11 x i8] c"rust-marker"
+@unreachable_string = private unnamed_addr constant [18 x i8] c"unreachable-marker"
+
+declare void @consume(ptr, i64)
+
 define i32 @protected_function(i32 %value) {
 entry:
   %result = add i32 %value, 7
   ret i32 %result
+}
+
+define i32 @protected_large_cfg(i1 %condition) {
+entry:
+  br i1 %condition, label %left, label %right
+
+left:
+  ret i32 1
+
+right:
+  ret i32 2
+}
+
+define i32 @protected_cross_block(i32 %value) {
+entry:
+  %result = add i32 %value, 7
+  br label %exit
+
+exit:
+  ret i32 %result
+}
+
+define void @protected_c_string() {
+entry:
+  call void @consume(ptr @c_string, i64 8)
+  ret void
+}
+
+define void @protected_rust_string() {
+entry:
+  call void @consume(ptr @rust_string, i64 11)
+  ret void
+}
+
+define void @protected_unreachable_string() {
+entry:
+  ret void
+
+unreachable:
+  call void @consume(ptr @unreachable_string, i64 18)
+  ret void
 }
 
 define i32 @excluded_function(i32 %value) {
@@ -80,8 +129,11 @@ class DefaultPolicyTests(unittest.TestCase):
     def test_environment_policy_transforms_only_matching_functions(self) -> None:
         process = self.run_opt(
             {
-                "XOLLVM_DEFAULT_CONFIG": "constenc(prob=100,minAbs=1,maxSites=16)",
-                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "constenc(prob=100,minAbs=1,maxSites=16),"
+                    "strenc(minlen=4,cipher=chacha)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_",
                 "XOLLVM_DEFAULT_EXCLUDE": "^excluded_function$",
                 "XOLLVM_IR_BUDGET_MULTIPLIER": "100",
                 "XOLLVM_MAX_FUNCTION_INSTRUCTIONS": "100",
@@ -95,6 +147,11 @@ class DefaultPolicyTests(unittest.TestCase):
         excluded = self.function_body(process.stdout, "excluded_function")
         self.assertNotIn("add i32 %value, 7", protected)
         self.assertIn("add i32 %value, 7", excluded)
+        self.assertNotIn("c-marker", process.stdout)
+        self.assertNotIn("rust-marker", process.stdout)
+        self.assertNotIn("unreachable-marker", process.stdout)
+        self.assertNotIn('section ".strenc', process.stdout)
+        self.assertIn('section "__DATA,__strenc_', process.stdout)
 
     def test_absent_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({})
@@ -103,6 +160,47 @@ class DefaultPolicyTests(unittest.TestCase):
             "add i32 %value, 7",
             self.function_body(process.stdout, "protected_function"),
         )
+
+    def test_flattening_instruction_ceiling_skips_large_functions(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "flattening(minBlocks=2,maxBlocks=10,maxInstructions=2)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_large_cfg$",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_large_cfg")
+        self.assertIn("br i1 %condition, label %left, label %right", body)
+
+    def test_flattening_runs_below_instruction_ceiling(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "flattening(minBlocks=2,maxBlocks=10,maxInsts=10)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_large_cfg$",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_large_cfg")
+        self.assertNotIn("br i1 %condition, label %left, label %right", body)
+
+    def test_flattening_skips_when_demotion_cannot_run(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "flattening(minBlocks=2,maxBlocks=10,maxDemotionRounds=0)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_cross_block$",
+                "XOLLVM_VERIFY_IR": "1",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_cross_block")
+        self.assertIn("br label %exit", body)
+        self.assertNotIn("fla.dispatch", body)
 
     def test_empty_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({"XOLLVM_DEFAULT_CONFIG": ""})
@@ -151,6 +249,40 @@ class DefaultPolicyTests(unittest.TestCase):
         )
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("Invalid -obf-default-exclude", process.stderr)
+
+    def test_invalid_flattening_demotion_ceiling_disables_the_pass(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "flattening(minBlocks=2,maxBlocks=10,maxDemoteRounds=1025)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_large_cfg$",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn(
+            "Flattening: MaxDemotionRounds must not exceed 1024.",
+            process.stderr,
+        )
+        body = self.function_body(process.stdout, "protected_large_cfg")
+        self.assertIn("br i1 %condition, label %left, label %right", body)
+
+    def test_invalid_flattening_instruction_ceiling_disables_the_pass(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "flattening(minBlocks=2,maxBlocks=10,maxInstructions=1000001)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_large_cfg$",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn(
+            "Flattening: MaxInstructions must not exceed 1000000.",
+            process.stderr,
+        )
+        body = self.function_body(process.stdout, "protected_large_cfg")
+        self.assertIn("br i1 %condition, label %left, label %right", body)
 
 
 def main() -> int:
