@@ -124,6 +124,21 @@ entry:
 }
 """
 
+MULTI_MODULE_IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+@message_SUFFIX = private unnamed_addr constant [13 x i8] c"hello-world!\\00"
+
+declare void @consume(ptr, i64)
+
+define i32 @protected_SUFFIX(i32 %value) {
+entry:
+  call void @consume(ptr @message_SUFFIX, i64 12)
+  %result = add i32 %value, 7
+  ret i32 %result
+}
+"""
+
 POLICY_ENVIRONMENT = {
     "XOLLVM_DEFAULT_CONFIG",
     "XOLLVM_DEFAULT_INCLUDE",
@@ -331,6 +346,65 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertNotIn("add i32 %value, 7", replaced)
         self.assertIn("__vm_", process.stdout)
         self.assertNotIn("br i1 %condition, label %left, label %right", defaulted)
+
+    def test_vm_runtime_symbols_do_not_collide_between_modules(self) -> None:
+        environment = self.process_environment(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "strenc(minlen=4,cipher=chacha)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_",
+                "XOLLVM_FUNCTION_RULES": (
+                    "merge\t^protected_.*$\tvm(preset=high)"
+                ),
+                "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "100",
+                "XOLLVM_IR_BUDGET_MAX": "20000",
+                "XOLLVM_MAX_FUNCTION_INSTRUCTIONS": "20000",
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            objects = []
+            for suffix in ["alpha", "beta"]:
+                source = root / f"{suffix}.ll"
+                bitcode = root / f"{suffix}.bc"
+                object_file = root / f"{suffix}.o"
+                source.write_text(MULTI_MODULE_IR.replace("SUFFIX", suffix))
+                transformed = subprocess.run(
+                    [
+                        str(self.opt),
+                        "-load-pass-plugin",
+                        str(self.plugin),
+                        "-passes=obfuscation",
+                        str(source),
+                        "-o",
+                        str(bitcode),
+                    ],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(transformed.returncode, 0, transformed.stderr)
+                lowered = subprocess.run(
+                    [
+                        str(self.opt.parent / "llc"),
+                        "-filetype=obj",
+                        str(bitcode),
+                        "-o",
+                        str(object_file),
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(lowered.returncode, 0, lowered.stderr)
+                objects.append(object_file)
+            clang = shutil.which("clang")
+            self.assertIsNotNone(clang)
+            linked = subprocess.run(
+                [clang, "-r", *map(str, objects), "-o", str(root / "combined.o")],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(linked.returncode, 0, linked.stderr)
 
     def test_function_rule_merges_with_the_default_policy(self) -> None:
         process = self.run_opt(

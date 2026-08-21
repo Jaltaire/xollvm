@@ -28,6 +28,7 @@
 #include "llvm/Transforms/Obfuscator/VMPass_Emitter.h"
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
 #include "llvm/Transforms/Obfuscator/AESStubBitcode.h"
+#include "llvm/Transforms/Obfuscator/StringEncryption.h"
 
 #include <functional>
 using namespace llvm;
@@ -356,6 +357,7 @@ void VMImpl::buildEncryptCtor() {
 
 	// Resolve dangling __strenc_key_a / __strenc_key_b declarations
 	provideStubKeyProviderBodies(M);
+	llvm::obf::internalizeStubFunctions(M);
 
 	auto* RKTy = ArrayType::get(I8Ty, 176);
 

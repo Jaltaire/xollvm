@@ -52,7 +52,21 @@ ALWAYS_ENABLED_STATISTIC(EncryptedStrings, "Number of AES-encrypted strings");
 ALWAYS_ENABLED_STATISTIC(DecryptCallsInserted, "Number of __strenc_decrypt calls inserted");
 ALWAYS_ENABLED_STATISTIC(StubLinked, "Times AES stub module was linked");
 
+bool llvm::obf::isStubFunctionName(StringRef Name) {
+    return Name.starts_with("__aes_") ||
+        Name.starts_with("__obf_aes_") ||
+        Name.starts_with("__strenc_");
+}
 
+void llvm::obf::internalizeStubFunctions(Module& M) {
+    for (Function& F : M) {
+        if (!isStubFunctionName(F.getName()) || F.isDeclaration()) continue;
+        F.setLinkage(GlobalValue::PrivateLinkage);
+        F.setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+        F.removeFnAttr(Attribute::OptimizeNone);
+        F.removeFnAttr(Attribute::NoInline);
+    }
+}
 
 namespace {
     std::string strencSection(const Module& M, StringRef kind, bool text) {
@@ -565,6 +579,7 @@ namespace {
     void StrEncImpl::hardenStubFunctions(Module& M,
         const ObfuscationConfig& StubPasses,
         ObfuscationAnnotationCache& Cache) {
+        llvm::obf::internalizeStubFunctions(M);
         // All stub functions are prefixed with "__aes_", "__obf_aes_", or
         // "__strenc_" (e.g. the ChaCha20 path's __strenc_chacha_decrypt).
         // After linking they may still have ExternalLinkage from their C
@@ -573,15 +588,8 @@ namespace {
         //   (b) they are eligible for dead-code elimination,
         //   (c) they get individual obfuscation seeds from the function driver.
         for (Function& F : M) {
-            if (!F.getName().starts_with("__aes_") &&
-                !F.getName().starts_with("__obf_aes_") &&
-                !F.getName().starts_with("__strenc_")) continue;
+            if (!llvm::obf::isStubFunctionName(F.getName())) continue;
             if (F.isDeclaration()) continue;
-
-            F.setLinkage(GlobalValue::PrivateLinkage);
-            F.setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-            F.removeFnAttr(Attribute::OptimizeNone);
-            F.removeFnAttr(Attribute::NoInline);
 
             if (!StubPasses.passes.empty() &&
                 Cache.PerFunction.find(&F) == Cache.PerFunction.end()) {
