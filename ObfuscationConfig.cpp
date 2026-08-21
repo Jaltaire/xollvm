@@ -6,6 +6,8 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
 
 #include "llvm/IR/Function.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <regex>
@@ -209,7 +211,28 @@ ObfuscationConfig AnnotationParser::parseAnnotations(Function* F) {
 	std::vector<std::string> annotations = llvm::obf::readAnnotations(F);
 
 	if (annotations.empty()) {
-		return finalConfig;
+		if (ObfDefaultConfig.empty())
+			return finalConfig;
+
+		Regex includeRegex(ObfDefaultInclude);
+		std::string regexError;
+		if (!includeRegex.isValid(regexError))
+			report_fatal_error(Twine("Invalid -obf-default-include regular expression: ") + regexError,
+				false);
+
+		if (!includeRegex.match(F->getName()))
+			return finalConfig;
+
+		if (!ObfDefaultExclude.empty()) {
+			Regex excludeRegex(ObfDefaultExclude);
+			if (!excludeRegex.isValid(regexError))
+				report_fatal_error(Twine("Invalid -obf-default-exclude regular expression: ") + regexError,
+					false);
+			if (excludeRegex.match(F->getName()))
+				return finalConfig;
+		}
+
+		annotations.push_back(ObfDefaultConfig);
 	}
 
 	if (ObfVerbose) {

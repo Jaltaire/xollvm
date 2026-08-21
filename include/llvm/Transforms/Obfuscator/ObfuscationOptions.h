@@ -10,6 +10,10 @@ namespace llvm {
 	extern llvm::cl::opt<uint64_t> ObfSeed;
 	extern llvm::cl::opt<bool> ObfDeterministic;
 	extern llvm::cl::opt<bool> ObfVerbose;
+	extern llvm::cl::opt<std::string> ObfDefaultConfig;
+	extern llvm::cl::opt<std::string> ObfDefaultInclude;
+	extern llvm::cl::opt<std::string> ObfDefaultExclude;
+	void ApplyObfuscationEnvironment();
 
 
 	extern llvm::cl::opt<bool> ObfSeedManifest;

@@ -53,6 +53,7 @@ static llvm::cl::opt<bool> EnableObfuscationEP(
 // Canonical registration. Wires every name in ObfPasses.inc into the
 // PassBuilder via the new-PM callback surface. Shared by both build modes.
 static void registerObfuscatorPasses(PassBuilder &PB) {
+  ApplyObfuscationEnvironment();
   // Named module passes: -passes=obfuscation
   PB.registerPipelineParsingCallback(
       [](StringRef Name, ModulePassManager &MPM,
@@ -86,7 +87,7 @@ static void registerObfuscatorPasses(PassBuilder &PB) {
   // Off by default => the pipeline is byte-identical.
   PB.registerPipelineStartEPCallback(
       [](ModulePassManager &MPM, OptimizationLevel) {
-        if (EnableObfuscationEP)
+        if (EnableObfuscationEP || !ObfDefaultConfig.empty())
           MPM.addPass(ObfuscationModulePass());
       });
 

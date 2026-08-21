@@ -182,6 +182,24 @@ Only functions carrying an `obf:` annotation are transformed; without
 annotations the flag is a no-op. Do not combine this with a separate
 `opt -passes=obfuscation` step on the same IR (it would run twice).
 
+Build systems that cannot emit LLVM annotations can supply a default specification. Explicitly
+annotated functions keep their annotation-derived configuration, while matching unannotated
+functions receive the default:
+
+```bash
+clang test.c -O2 \
+  -mllvm -enable-obfuscation \
+  -mllvm '-obf-default-config=mba(prob=70),split(num=5),bcf(prob=25)' \
+  -mllvm '-obf-default-include=^protected_' \
+  -mllvm '-obf-default-exclude=_test$' \
+  -o test.obf
+```
+
+LLVM hosts that load pass plugins after parsing their own command line can provide the same values
+through `XOLLVM_DEFAULT_CONFIG`, `XOLLVM_DEFAULT_INCLUDE`, and `XOLLVM_DEFAULT_EXCLUDE`. The plugin
+also accepts `XOLLVM_IR_BUDGET_MULTIPLIER`, `XOLLVM_MAX_FUNCTION_INSTRUCTIONS`, `XOLLVM_VERIFY_IR`,
+`XOLLVM_RANDOMIZE_ADEC_CONSTANTS`, and `XOLLVM_ADEC_PREFIX` for the corresponding global settings.
+
 **Visual Studio / MSBuild:** set the project's compiler to xollvm's `clang-cl`
 (LLVM toolset), then add the `/clang:-mllvm /clang:-enable-obfuscation` options
 (plus any seed flags) to C/C++ → Command Line → Additional Options.
@@ -210,6 +228,9 @@ opt -passes=obf-metrics -S test.ll -o /dev/null > metrics.jsonl
 | `-obf-deterministic` | off | When seed is 0: derive module seed from module identifier hash (otherwise uses `random_device`). |
 | `-obf-verify` | off | Run IR verification before/after each obfuscation stage. |
 | `-obf-verbose` | off | Print extra info (parsing, skips, budgets, pipeline order, etc.). |
+| `-obf-default-config=<spec>` | empty | Apply an annotation-format specification to matching unannotated functions. |
+| `-obf-default-include=<regex>` | `.*` | Select function names eligible for the default configuration. |
+| `-obf-default-exclude=<regex>` | empty | Exclude matching function names from the default configuration. |
 | `-obf-max-function-insts=<N>` | 0 (off) | Skip functions larger than N instructions. |
 | `-obf-max-function-blocks=<N>` | 0 (off) | Skip functions larger than N basic blocks. |
 | `-obf-max-loop-depth=<N>` | 0 (off) | Skip functions whose loop nesting depth exceeds N. |

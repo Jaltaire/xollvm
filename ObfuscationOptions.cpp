@@ -1,6 +1,8 @@
 #include "llvm/Transforms/Obfuscator/ObfuscationOptions.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cctype>
+#include <cstdlib>
 
 using namespace llvm;
 
@@ -15,6 +17,64 @@ cl::opt<bool> llvm::ObfDeterministic("obf-deterministic",
 cl::opt<bool> llvm::ObfVerbose("obf-verbose",
 	cl::desc("Verbose obfuscator logging."),
 	cl::init(false));
+
+cl::opt<std::string> llvm::ObfDefaultConfig(
+	"obf-default-config",
+	cl::desc("Apply this obfuscation specification to matching unannotated functions."),
+	cl::init(""));
+
+cl::opt<std::string> llvm::ObfDefaultInclude(
+	"obf-default-include",
+	cl::desc("Regular expression selecting functions for the default configuration."),
+	cl::init(".*"));
+
+cl::opt<std::string> llvm::ObfDefaultExclude(
+	"obf-default-exclude",
+	cl::desc("Regular expression excluding functions from the default configuration."),
+	cl::init(""));
+
+namespace {
+	const char* environmentValue(const char* name) {
+		const char* value = std::getenv(name);
+		return value && *value ? value : nullptr;
+	}
+
+	unsigned environmentUnsigned(const char* name, const char* value) {
+		unsigned parsed = 0;
+		if (StringRef(value).getAsInteger(10, parsed))
+			report_fatal_error(Twine("Invalid unsigned integer in ") + name + ": " + value,
+				false);
+		return parsed;
+	}
+
+	bool environmentBoolean(const char* name, const char* value) {
+		StringRef normalized(value);
+		if (normalized.equals_insensitive("1") || normalized.equals_insensitive("true"))
+			return true;
+		if (normalized.equals_insensitive("0") || normalized.equals_insensitive("false"))
+			return false;
+		report_fatal_error(Twine("Invalid boolean in ") + name + ": " + value, false);
+	}
+}
+
+void llvm::ApplyObfuscationEnvironment() {
+	if (const char* value = environmentValue("XOLLVM_DEFAULT_CONFIG"))
+		ObfDefaultConfig = value;
+	if (const char* value = environmentValue("XOLLVM_DEFAULT_INCLUDE"))
+		ObfDefaultInclude = value;
+	if (const char* value = environmentValue("XOLLVM_DEFAULT_EXCLUDE"))
+		ObfDefaultExclude = value;
+	if (const char* value = environmentValue("XOLLVM_IR_BUDGET_MULTIPLIER"))
+		ObfIRBudgetMultiplier = environmentUnsigned("XOLLVM_IR_BUDGET_MULTIPLIER", value);
+	if (const char* value = environmentValue("XOLLVM_MAX_FUNCTION_INSTRUCTIONS"))
+		ObfMaxFunctionInsts = environmentUnsigned("XOLLVM_MAX_FUNCTION_INSTRUCTIONS", value);
+	if (const char* value = environmentValue("XOLLVM_VERIFY_IR"))
+		ObfVerify = environmentBoolean("XOLLVM_VERIFY_IR", value);
+	if (const char* value = environmentValue("XOLLVM_RANDOMIZE_ADEC_CONSTANTS"))
+		ADecRandomizeConsts = environmentBoolean("XOLLVM_RANDOMIZE_ADEC_CONSTANTS", value);
+	if (const char* value = environmentValue("XOLLVM_ADEC_PREFIX"))
+		ADecPrefix = value;
+}
 
 cl::opt<bool> llvm::ObfSeedManifest(
 	"obf-seed-manifest",

@@ -20,6 +20,9 @@
 
 cmake_minimum_required(VERSION 3.20)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 
 # ---------------------------------------------------------------------------
 # Build-mode detection
@@ -147,7 +150,9 @@ include_directories(
 )
 
 # intrinsics_gen only exists inside an LLVM build tree.
-if(TARGET intrinsics_gen)
+if(TARGET intrinsics_gen AND TARGET analysis_gen AND TARGET vt_gen)
+  set(_OBF_DEPENDS DEPENDS intrinsics_gen analysis_gen vt_gen)
+elseif(TARGET intrinsics_gen)
   set(_OBF_DEPENDS DEPENDS intrinsics_gen)
 else()
   set(_OBF_DEPENDS "")
@@ -179,6 +184,10 @@ add_llvm_pass_plugin(Obfuscator
   ${AES_GENERATED_INC}
   ${_OBF_DEPENDS}
   ${_OBF_LINK_COMPONENTS}
+)
+
+target_compile_options(Obfuscator PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:${LLVM_CXXFLAGS_RTTI_DISABLE}>
 )
 
 # The AES stub .inc must be generated before any obfuscator source that
