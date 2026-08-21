@@ -11,11 +11,13 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -465,6 +467,8 @@ namespace {
         /// True if GV or a constexpr derived from it is converted to an integer.
         static bool isAddressTakenAsInteger(Constant* C);
 
+        static bool mayEscape(GlobalVariable* GV);
+
         /// True if GV should be encrypted (is a non-empty, eligible string).
         static bool shouldEncrypt(GlobalVariable& GV, int minLength);
 
@@ -705,6 +709,27 @@ namespace {
                 // ptrtoint'd further downstream — follow them.
                 if (isAddressTakenAsInteger(CE)) return true;
             }
+        }
+        return false;
+    }
+
+    bool StrEncImpl::mayEscape(GlobalVariable* GV) {
+        SmallVector<const Use*, 20> Worklist;
+        SmallPtrSet<const Use*, 20> Visited;
+
+        auto AddUses = [&](const Value* V) {
+            for (const Use& U : V->uses()) {
+                if (!Visited.insert(&U).second) continue;
+                Worklist.push_back(&U);
+            }
+        };
+
+        AddUses(GV);
+        while (!Worklist.empty()) {
+            const Use* U = Worklist.pop_back_val();
+            UseCaptureInfo Capture = DetermineUseCaptureKind(*U, GV);
+            if (capturesAnything(Capture.UseCC)) return true;
+            if (capturesAnything(Capture.ResultCC)) AddUses(U->getUser());
         }
         return false;
     }
@@ -1166,6 +1191,7 @@ namespace {
             const uint64_t CtBytes = CtTy->getNumElements();
 
             bool HasIndirectUsers = isAddressTakenAsInteger(GV) ||
+                mayEscape(GV) ||
                 llvm::any_of(GV->users(), [](User* U) {
                 return !isa<Instruction>(U);
                 });

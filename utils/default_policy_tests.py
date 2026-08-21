@@ -98,8 +98,16 @@ target triple = "arm64-apple-macosx14.0.0"
 @message = private unnamed_addr constant [16 x i8] c"runtime-marker!\\00"
 @descriptor = private constant { ptr, i64 } { ptr @message, i64 15 }
 @address_message = private unnamed_addr constant [16 x i8] c"address-marker!\\00"
+@escaped_message = private unnamed_addr constant [16 x i8] c"escaped-marker!\\00"
+@escaped_pointer = private global ptr null
 
 declare i32 @puts(ptr)
+
+define void @capture_message() {
+entry:
+  store ptr @escaped_message, ptr @escaped_pointer
+  ret void
+}
 
 define i32 @main() {
 entry:
@@ -108,6 +116,9 @@ entry:
   %address = ptrtoint ptr @address_message to i64
   %address_value = inttoptr i64 %address to ptr
   %address_result = call i32 @puts(ptr %address_value)
+  call void @capture_message()
+  %escaped_value = load ptr, ptr @escaped_pointer
+  %escaped_result = call i32 @puts(ptr %escaped_value)
   ret i32 0
 }
 """
@@ -203,12 +214,15 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertIn('section "__DATA,__strenc_', process.stdout)
         self.assertIn("@llvm.global_ctors", process.stdout)
 
-    def test_indirect_string_encryption_preserves_runtime_behavior(self) -> None:
+    def run_runtime_policy(self, specification: str) -> bytes:
         environment = self.process_environment(
             {
-                "XOLLVM_DEFAULT_CONFIG": "strenc(minlen=4,cipher=chacha)",
+                "XOLLVM_DEFAULT_CONFIG": specification,
                 "XOLLVM_DEFAULT_INCLUDE": "^main$",
                 "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "100",
+                "XOLLVM_IR_BUDGET_MAX": "20000",
+                "XOLLVM_MAX_FUNCTION_INSTRUCTIONS": "20000",
             }
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -259,9 +273,33 @@ class DefaultPolicyTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(executed.returncode, 0, executed.stderr)
-            self.assertEqual(executed.stdout, "runtime-marker!\naddress-marker!\n")
-            self.assertNotIn(b"runtime-marker", executable.read_bytes())
-            self.assertNotIn(b"address-marker", executable.read_bytes())
+            self.assertEqual(
+                executed.stdout,
+                "runtime-marker!\naddress-marker!\nescaped-marker!\n",
+            )
+            return executable.read_bytes()
+
+    def test_indirect_string_encryption_preserves_runtime_behavior(self) -> None:
+        executable = self.run_runtime_policy("strenc(minlen=4,cipher=chacha)")
+        self.assertNotIn(b"runtime-marker", executable)
+        self.assertNotIn(b"address-marker", executable)
+        self.assertNotIn(b"escaped-marker", executable)
+
+    def test_indirect_string_encryption_survives_the_severe_policy(self) -> None:
+        executable = self.run_runtime_policy(
+            "constenc(prob=100,minAbs=1,maxSites=128),"
+            "mba(preset=high,prob=70,maxSites=120),"
+            "substitution(loop=2,maxSites=160),"
+            "vcall(prob=25,indexStrength=2),split(num=3),"
+            "bcf(prob=20,loop=1,maxBlocks=2000),"
+            "flattening(minBlocks=3,maxBlocks=120,maxInstructions=250,"
+            "maxDemotionRounds=8,fakeTransitions=1,fakeCases=2),"
+            "shield(maxSites=160),adec(prob=40,strength=2,maxSites=32),"
+            "strenc(minlen=4,cipher=chacha)"
+        )
+        self.assertNotIn(b"runtime-marker", executable)
+        self.assertNotIn(b"address-marker", executable)
+        self.assertNotIn(b"escaped-marker", executable)
 
     def test_absent_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({})
