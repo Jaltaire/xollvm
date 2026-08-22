@@ -30,13 +30,15 @@ STATISTIC(VMVirtRegs, "Virtual register slots allocated (v7)");
 uint32_t BytecodeEmitter::isize(Instruction* I) {
 	if (isa<AllocaInst>(I) || isa<UnreachableInst>(I)) return 0;
 	unsigned Op = I->getOpcode(); Type* Ty = I->getType();
-	// i32/i64 binops (separate opcodes for i32 vs i64)
+	// Integer binops use separate opcodes for the 32-bit and 64-bit register files.
 	if (Op == Instruction::Add || Op == Instruction::Sub || Op == Instruction::Mul ||
 		Op == Instruction::And || Op == Instruction::Or || Op == Instruction::Xor ||
 		Op == Instruction::Shl || Op == Instruction::LShr || Op == Instruction::AShr ||
 		Op == Instruction::SDiv || Op == Instruction::UDiv ||
 		Op == Instruction::SRem || Op == Instruction::URem) {
 		if (Ty->isIntegerTy(32) || Ty->isIntegerTy(64)) return 5;
+		if ((Op == Instruction::And || Op == Instruction::Or || Op == Instruction::Xor) &&
+			Ty->isIntegerTy() && Ty->getIntegerBitWidth() < 32) return 5;
 		markUnsupported(I); return 0;
 	}
 	// float binary ops
@@ -478,7 +480,12 @@ void BytecodeEmitter::emit(Instruction* I) {
 		Op == Instruction::Shl || Op == Instruction::LShr || Op == Instruction::AShr ||
 		Op == Instruction::SDiv || Op == Instruction::UDiv ||
 		Op == Instruction::SRem || Op == Instruction::URem) {
-		if (!(Ty->isIntegerTy(32) || Ty->isIntegerTy(64))) { markUnsupported(I); return; }
+		const bool IsNarrowBitwise =
+			(Op == Instruction::And || Op == Instruction::Or || Op == Instruction::Xor) &&
+			Ty->isIntegerTy() && Ty->getIntegerBitWidth() < 32;
+		if (!(Ty->isIntegerTy(32) || Ty->isIntegerTy(64) || IsNarrowBitwise)) {
+			markUnsupported(I); return;
+		}
 		const bool Is64 = Ty->isIntegerTy(64);
 		static const unsigned OL[] = { Instruction::Add,Instruction::Sub,Instruction::Mul,
 			Instruction::And,Instruction::Or,Instruction::Xor,

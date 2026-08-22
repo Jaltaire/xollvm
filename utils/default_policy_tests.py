@@ -84,6 +84,21 @@ entry:
   ret i8 %result
 }
 
+define i8 @protected_narrow_bitwise(i8 %left, i8 %right) {
+entry:
+  %both = and i8 %left, %right
+  %either = or i8 %left, %right
+  %result = xor i8 %both, %either
+  ret i8 %result
+}
+
+define i1 @protected_boolean_bitwise(i1 %left, i1 %right) {
+entry:
+  %both = and i1 %left, %right
+  %result = xor i1 %both, %left
+  ret i1 %result
+}
+
 define void @protected_c_string() {
 entry:
   call void @consume(ptr @c_string, i64 8)
@@ -169,6 +184,36 @@ define i32 @protected_SUFFIX(i32 %value) {
 entry:
   call void @consume(ptr @message_SUFFIX, i64 12)
   %result = add i32 %value, 7
+  ret i32 %result
+}
+"""
+
+NARROW_BITWISE_RUNTIME_IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+define i8 @protected_narrow_bitwise(i8 %left, i8 %right) {
+entry:
+  %both = and i8 %left, %right
+  %either = or i8 %left, %right
+  %result = xor i8 %both, %either
+  ret i8 %result
+}
+
+define i1 @protected_boolean_bitwise(i1 %left, i1 %right) {
+entry:
+  %both = and i1 %left, %right
+  %result = xor i1 %both, %left
+  ret i1 %result
+}
+
+define i32 @main() {
+entry:
+  %narrow = call i8 @protected_narrow_bitwise(i8 172, i8 105)
+  %narrow_ok = icmp eq i8 %narrow, 197
+  %boolean = call i1 @protected_boolean_bitwise(i1 true, i1 false)
+  %all_ok = and i1 %narrow_ok, %boolean
+  %failed = xor i1 %all_ok, true
+  %result = zext i1 %failed to i32
   ret i32 %result
 }
 """
@@ -597,6 +642,70 @@ entry:
         body = self.function_body(process.stdout, "protected_compared_bool")
         self.assertNotIn("icmp ule i1 %condition, true", body)
         self.assertIn("__vm_", process.stdout)
+
+    def test_vm_virtualizes_narrow_bitwise_operations(self) -> None:
+        cases = [
+            ("protected_narrow_bitwise", "i8"),
+            ("protected_boolean_bitwise", "i1"),
+        ]
+        for function, integer_type in cases:
+            with self.subTest(function=function):
+                process = self.run_opt(
+                    {
+                        "XOLLVM_DEFAULT_CONFIG": "vm(preset=high)",
+                        "XOLLVM_DEFAULT_INCLUDE": f"^{function}$",
+                        "XOLLVM_VERIFY_IR": "1",
+                        "XOLLVM_IR_BUDGET_MULTIPLIER": "10000",
+                        "XOLLVM_IR_BUDGET_MAX": "20000",
+                    }
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                body = self.function_body(process.stdout, function)
+                self.assertNotIn(f" and {integer_type}", body)
+                self.assertNotIn(f" or {integer_type}", body)
+                self.assertNotIn(f" xor {integer_type}", body)
+                self.assertIn("__vm_", process.stdout)
+
+    def test_vm_narrow_bitwise_operations_preserve_runtime_behavior(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "vm(preset=light)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_.*bitwise$",
+                "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "10000",
+                "XOLLVM_IR_BUDGET_MAX": "30000",
+            },
+            source_ir=NARROW_BITWISE_RUNTIME_IR,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transformed = root / "transformed.ll"
+            object_file = root / "transformed.o"
+            executable = root / "transformed"
+            transformed.write_text(process.stdout)
+            lowered = subprocess.run(
+                [
+                    str(self.opt.parent / "llc"),
+                    "-filetype=obj",
+                    str(transformed),
+                    "-o",
+                    str(object_file),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(lowered.returncode, 0, lowered.stderr)
+            clang = shutil.which("clang")
+            self.assertIsNotNone(clang)
+            compiled = subprocess.run(
+                [clang, str(object_file), "-o", str(executable)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            executed = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
 
     def test_vm_runtime_symbols_do_not_collide_between_modules(self) -> None:
         environment = self.process_environment(
