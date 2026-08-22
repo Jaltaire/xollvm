@@ -57,6 +57,12 @@ entry:
   ret i8 %result
 }
 
+define i1 @protected_truncated_bool(i8 %value) {
+entry:
+  %result = trunc i8 %value to i1
+  ret i1 %result
+}
+
 define void @protected_c_string() {
 entry:
   call void @consume(ptr @c_string, i64 8)
@@ -431,7 +437,7 @@ class DefaultPolicyTests(unittest.TestCase):
                     "replace\t^protected_function$\tvm(preset=high)"
                 ),
                 "XOLLVM_VERIFY_IR": "1",
-                "XOLLVM_IR_BUDGET_MULTIPLIER": "1000",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "10000",
                 "XOLLVM_IR_BUDGET_MAX": "20000",
             }
         )
@@ -448,13 +454,28 @@ class DefaultPolicyTests(unittest.TestCase):
                 "XOLLVM_DEFAULT_CONFIG": "vm(preset=high)",
                 "XOLLVM_DEFAULT_INCLUDE": "^protected_narrow_bool$",
                 "XOLLVM_VERIFY_IR": "1",
-                "XOLLVM_IR_BUDGET_MULTIPLIER": "1000",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "10000",
                 "XOLLVM_IR_BUDGET_MAX": "20000",
             }
         )
         self.assertEqual(process.returncode, 0, process.stderr)
         body = self.function_body(process.stdout, "protected_narrow_bool")
         self.assertNotIn("zext i1 %condition to i8", body)
+        self.assertIn("__vm_", process.stdout)
+
+    def test_vm_virtualizes_boolean_truncation_from_narrow_integer_values(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "vm(preset=high)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_truncated_bool$",
+                "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "10000",
+                "XOLLVM_IR_BUDGET_MAX": "20000",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_truncated_bool")
+        self.assertNotIn("trunc i8 %value to i1", body)
         self.assertIn("__vm_", process.stdout)
 
     def test_vm_runtime_symbols_do_not_collide_between_modules(self) -> None:
