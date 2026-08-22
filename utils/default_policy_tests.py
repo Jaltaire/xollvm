@@ -193,13 +193,14 @@ class DefaultPolicyTests(unittest.TestCase):
         self,
         environment: dict[str, str],
         arguments: tuple[str, ...] = (),
+        source_ir: str = IR,
     ) -> subprocess.CompletedProcess[str]:
         process_environment = self.process_environment(environment)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "input.ll"
             output = root / "output.ll"
-            source.write_text(IR)
+            source.write_text(source_ir)
             process = subprocess.run(
                 [
                     str(self.opt),
@@ -255,6 +256,33 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 3)
         self.assertEqual(protected.count("call void @obscura_rasp_interlock"), 3)
         self.assertNotIn("select i1", protected)
+
+    def test_runtime_injection_excludes_the_runtime_abi_module(self) -> None:
+        runtime_ir = IR + """
+define i64 @obscura_rasp_probe(i64 %site, i64 %challenge, i64 %caller) {
+entry:
+  ret i64 %challenge
+}
+
+define void @obscura_rasp_interlock(i64 %site, i64 %observed, i64 %expected) {
+entry:
+  ret void
+}
+"""
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=2)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_VERIFY_IR": "1",
+            },
+            source_ir=runtime_ir,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_function")
+        self.assertNotIn("obscura_rasp_probe", protected)
+        self.assertNotIn("obscura_rasp_interlock", protected)
 
     def test_runtime_injection_respects_probability_and_size_gates(self) -> None:
         disabled = self.run_opt(
