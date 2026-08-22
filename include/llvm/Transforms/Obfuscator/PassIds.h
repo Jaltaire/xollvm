@@ -12,7 +12,7 @@ namespace llvm::obf {
 		static constexpr llvm::StringRef Ids[] = {
 			"flattening", "bcf", "split", "substitution", "mba", "vcall",
 			"strenc", "aes_stub", "sdiff", "adec", "shield", "vm", "constenc",
-			"fmerge"
+			"fmerge", "rasp"
 		};
 		return Ids;
 	}
@@ -47,6 +47,8 @@ namespace llvm::obf {
 			return "constenc";
 		if (S == "fmerge" || S == "funcmerge" || S == "merge")
 			return "fmerge";
+		if (S == "rasp" || S == "runtime" || S == "runtime-injection")
+			return "rasp";
 		// Unknown stays unknown (validator will reject)
 		return S;
 	}

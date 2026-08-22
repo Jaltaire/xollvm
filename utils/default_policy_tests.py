@@ -168,7 +168,11 @@ class DefaultPolicyTests(unittest.TestCase):
         process_environment.update(environment)
         return process_environment
 
-    def run_opt(self, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def run_opt(
+        self,
+        environment: dict[str, str],
+        arguments: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
         process_environment = self.process_environment(environment)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -180,6 +184,7 @@ class DefaultPolicyTests(unittest.TestCase):
                     str(self.opt),
                     "-load-pass-plugin",
                     str(self.plugin),
+                    *arguments,
                     "-passes=obfuscation",
                     "-S",
                     str(source),
@@ -193,6 +198,87 @@ class DefaultPolicyTests(unittest.TestCase):
             if process.returncode == 0:
                 process.stdout = output.read_text()
             return process
+
+    def test_runtime_injection_interlocks_function_results(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=2)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_VERIFY_IR": "1",
+            },
+            ("--obf-seed=41",),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_function")
+        excluded = self.function_body(process.stdout, "excluded_function")
+        self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 2)
+        self.assertEqual(protected.count("call void @obscura_rasp_interlock"), 2)
+        self.assertIn("select i1", protected)
+        self.assertNotIn("obscura_rasp_probe", excluded)
+
+    def test_runtime_injection_covers_multiple_function_exits(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=2)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_large_cfg$",
+                "XOLLVM_VERIFY_IR": "1",
+            },
+            ("--obf-seed=42",),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_large_cfg")
+        self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 3)
+        self.assertEqual(protected.count("call void @obscura_rasp_interlock"), 3)
+        self.assertEqual(protected.count("select i1"), 2)
+
+    def test_runtime_injection_respects_probability_and_size_gates(self) -> None:
+        disabled = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "rasp(prob=0,minInstructions=1)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+            }
+        )
+        oversized_minimum = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1000)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+            }
+        )
+        self.assertEqual(disabled.returncode, 0, disabled.stderr)
+        self.assertEqual(oversized_minimum.returncode, 0, oversized_minimum.stderr)
+        self.assertNotIn(
+            "obscura_rasp_probe",
+            self.function_body(disabled.stdout, "protected_function"),
+        )
+        self.assertNotIn(
+            "obscura_rasp_probe",
+            self.function_body(oversized_minimum.stdout, "protected_function"),
+        )
+
+    def test_runtime_injection_is_reproducible_and_release_specific(self) -> None:
+        environment = {
+            "XOLLVM_DEFAULT_CONFIG": (
+                "rasp(prob=100,minInstructions=1,maxExitSites=1)"
+            ),
+            "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+        }
+        first = self.run_opt(environment, ("--obf-seed=43",))
+        repeated = self.run_opt(environment, ("--obf-seed=43",))
+        different = self.run_opt(environment, ("--obf-seed=44",))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        self.assertEqual(different.returncode, 0, different.stderr)
+        first_body = self.function_body(first.stdout, "protected_function")
+        repeated_body = self.function_body(repeated.stdout, "protected_function")
+        different_body = self.function_body(different.stdout, "protected_function")
+        self.assertEqual(first_body, repeated_body)
+        self.assertNotEqual(first_body, different_body)
 
     @staticmethod
     def function_body(ir: str, name: str) -> str:
@@ -338,6 +424,8 @@ class DefaultPolicyTests(unittest.TestCase):
                     "replace\t^protected_function$\tvm(preset=high)"
                 ),
                 "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "1000",
+                "XOLLVM_IR_BUDGET_MAX": "20000",
             }
         )
         self.assertEqual(process.returncode, 0, process.stderr)

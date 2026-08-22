@@ -301,6 +301,16 @@ namespace llvm {
 		bool validate() const;
 	};
 
+	struct RuntimeInjectionConfig {
+		bool enable = false;
+		unsigned probability = 10;
+		unsigned minimumInstructions = 8;
+		unsigned maximumExitSites = 2;
+
+		static RuntimeInjectionConfig fromPassConfig(const PassConfig& pc);
+		bool validate() const;
+	};
+
 	struct VMPassConfig {
 		bool     enable = false;
 		unsigned minBlocks = 1;

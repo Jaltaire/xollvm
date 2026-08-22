@@ -13,6 +13,7 @@
 #include "llvm/Transforms/Obfuscator/SemanticDiffusion.h"
 #include "llvm/Transforms/Obfuscator/StringEncryption.h"
 #include "llvm/Transforms/Obfuscator/VirtualCall.h"
+#include "llvm/Transforms/Obfuscator/RuntimeInjection.h"
 #include "llvm/Transforms/Obfuscator/ObfRepairSSA.h"
 #include "llvm/Transforms/Obfuscator/VMPass.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -39,6 +40,12 @@ ObfuscationPipeline::getOrderingRules() {
 	rules["fmerge"] = PassOrderingRules{
 		{},  // before: nothing (runs first)
 		{"mba","substitution","split","sdiff","bcf","vcall","flattening","shield","adec","strenc"},
+		{}
+	};
+
+	rules["rasp"] = PassOrderingRules{
+		{},
+		{"constenc","mba","substitution","split","sdiff","bcf","flattening","vcall","vm","shield","adec"},
 		{}
 	};
 
@@ -377,7 +384,10 @@ void ObfuscationPipeline::buildPipeline(FunctionPassManager& FPM,
 			continue; // module pass only
 		}
 
-		if (passName == "constenc") {
+		if (passName == "rasp") {
+			add(RuntimeInjectionPass(), passName, false);
+		}
+		else if (passName == "constenc") {
 			add(ConstEncPass(), passName, false);
 		}
 		else if (passName == "mba") {
@@ -442,7 +452,12 @@ std::vector<ObfPassEntry> ObfuscationPipeline::getPassEntries(
 		E.Name = passName;
 		E.NeedsSSARepair = false;
 
-		if (passName == "constenc") {
+		if (passName == "rasp") {
+			E.Run = [](Function& F, FunctionAnalysisManager& AM) {
+				return RuntimeInjectionPass().run(F, AM);
+				};
+		}
+		else if (passName == "constenc") {
 			E.Run = [](Function& F, FunctionAnalysisManager& AM) {
 				return ConstEncPass().run(F, AM);
 				};

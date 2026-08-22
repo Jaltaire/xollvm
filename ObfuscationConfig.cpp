@@ -1227,6 +1227,28 @@ bool VirtualCallConfig::validate() const {
 	return true;
 }
 
+RuntimeInjectionConfig RuntimeInjectionConfig::fromPassConfig(const PassConfig& pc) {
+	RuntimeInjectionConfig cfg;
+	cfg.enable = pc.enabled;
+	try {
+		if (pc.params.count("prob"))
+			cfg.probability = (unsigned)std::stoul(pc.params.at("prob"));
+		if (pc.params.count("minInstructions"))
+			cfg.minimumInstructions = (unsigned)std::stoul(pc.params.at("minInstructions"));
+		if (pc.params.count("maxExitSites"))
+			cfg.maximumExitSites = (unsigned)std::stoul(pc.params.at("maxExitSites"));
+	}
+	catch (const std::exception& e) {
+		errs() << "Runtime injection parameters are invalid. " << e.what() << "\n";
+		cfg.enable = false;
+	}
+	return cfg;
+}
+
+bool RuntimeInjectionConfig::validate() const {
+	return !enable || (probability <= 100 && maximumExitSites <= 32);
+}
+
 
 // ============================================================================
 // Optimization shield

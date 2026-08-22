@@ -92,6 +92,7 @@ set(OBF_SOURCES
   FunctionMerging.cpp
   StringEncryption.cpp
   VirtualCall.cpp
+  RuntimeInjection.cpp
   AntiDecompiler.cpp
   ADec/ArchBackend.cpp
   ADec/Arch_X86_64.cpp
