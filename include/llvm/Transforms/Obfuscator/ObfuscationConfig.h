@@ -306,6 +306,8 @@ namespace llvm {
 		unsigned probability = 10;
 		unsigned minimumInstructions = 8;
 		unsigned maximumExitSites = 2;
+		unsigned maximumBlockSites = 2;
+		bool semanticReturns = false;
 
 		static RuntimeInjectionConfig fromPassConfig(const PassConfig& pc);
 		bool validate() const;

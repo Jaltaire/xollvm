@@ -50,6 +50,19 @@ exit:
   ret i32 %result
 }
 
+define i32 @protected_internal_cfg(i32 %value) {
+entry:
+  %first = add i32 %value, 7
+  br label %middle
+
+middle:
+  %second = mul i32 %first, 3
+  br label %exit
+
+exit:
+  ret i32 %second
+}
+
 define i8 @protected_narrow_bool(i64 %value) {
 entry:
   %condition = icmp ugt i64 %value, 7
@@ -236,7 +249,7 @@ class DefaultPolicyTests(unittest.TestCase):
         protected = self.function_body(process.stdout, "protected_function")
         excluded = self.function_body(process.stdout, "excluded_function")
         self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 2)
-        self.assertEqual(protected.count("call void @obscura_rasp_interlock"), 2)
+        self.assertEqual(protected.count("call void @obscura_rasp_interlock_"), 2)
         self.assertNotIn("select i1", protected)
         self.assertNotIn("obscura_rasp_probe", excluded)
 
@@ -254,8 +267,44 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         protected = self.function_body(process.stdout, "protected_large_cfg")
         self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 3)
-        self.assertEqual(protected.count("call void @obscura_rasp_interlock"), 3)
+        self.assertEqual(protected.count("call void @obscura_rasp_interlock_"), 3)
         self.assertNotIn("select i1", protected)
+
+    def test_runtime_injection_distributes_checks_into_internal_blocks(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=1,maxBlockSites=2)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_internal_cfg$",
+                "XOLLVM_VERIFY_IR": "1",
+            },
+            ("--obf-seed=142",),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_internal_cfg")
+        self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 3)
+        self.assertEqual(protected.count("call void @obscura_rasp_interlock_"), 3)
+        self.assertIn("obscura_rasp_probe", protected.split("middle:", 1)[1])
+
+    def test_runtime_injection_can_semantically_interlock_integer_results(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=1,"
+                    "maxBlockSites=0,semanticReturns=1)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_VERIFY_IR": "1",
+            },
+            ("--obf-seed=143",),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_function")
+        self.assertIn("icmp ne i64", protected)
+        self.assertRegex(protected, r"xor i32 %result, %[^\n]+")
+        self.assertGreaterEqual(protected.count("store i64"), 2)
+        self.assertIn("load i64", protected)
 
     def test_runtime_injection_excludes_the_runtime_abi_module(self) -> None:
         runtime_ir = IR + """
@@ -264,7 +313,7 @@ entry:
   ret i64 %challenge
 }
 
-define void @obscura_rasp_interlock(i64 %site, i64 %observed, i64 %expected) {
+define void @obscura_rasp_interlock_0(i64 %site, i64 %observed, i64 %expected) {
 entry:
   ret void
 }
@@ -282,7 +331,7 @@ entry:
         self.assertEqual(process.returncode, 0, process.stderr)
         protected = self.function_body(process.stdout, "protected_function")
         self.assertNotIn("obscura_rasp_probe", protected)
-        self.assertNotIn("obscura_rasp_interlock", protected)
+        self.assertNotIn("obscura_rasp_interlock_", protected)
 
     def test_runtime_injection_respects_probability_and_size_gates(self) -> None:
         disabled = self.run_opt(

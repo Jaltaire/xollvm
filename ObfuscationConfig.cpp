@@ -1237,6 +1237,10 @@ RuntimeInjectionConfig RuntimeInjectionConfig::fromPassConfig(const PassConfig& 
 			cfg.minimumInstructions = (unsigned)std::stoul(pc.params.at("minInstructions"));
 		if (pc.params.count("maxExitSites"))
 			cfg.maximumExitSites = (unsigned)std::stoul(pc.params.at("maxExitSites"));
+		if (pc.params.count("maxBlockSites"))
+			cfg.maximumBlockSites = (unsigned)std::stoul(pc.params.at("maxBlockSites"));
+		if (pc.params.count("semanticReturns"))
+			cfg.semanticReturns = pc.params.at("semanticReturns") != "0";
 	}
 	catch (const std::exception& e) {
 		errs() << "Runtime injection parameters are invalid. " << e.what() << "\n";
@@ -1246,7 +1250,7 @@ RuntimeInjectionConfig RuntimeInjectionConfig::fromPassConfig(const PassConfig& 
 }
 
 bool RuntimeInjectionConfig::validate() const {
-	return !enable || (probability <= 100 && maximumExitSites <= 32);
+	return !enable || (probability <= 100 && maximumExitSites <= 32 && maximumBlockSites <= 32);
 }
 
 
