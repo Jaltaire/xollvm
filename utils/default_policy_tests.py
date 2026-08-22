@@ -220,7 +220,7 @@ class DefaultPolicyTests(unittest.TestCase):
                 process.stdout = output.read_text()
             return process
 
-    def test_runtime_injection_interlocks_function_results(self) -> None:
+    def test_runtime_injection_interlocks_without_corrupting_abi_results(self) -> None:
         process = self.run_opt(
             {
                 "XOLLVM_DEFAULT_CONFIG": (
@@ -236,7 +236,7 @@ class DefaultPolicyTests(unittest.TestCase):
         excluded = self.function_body(process.stdout, "excluded_function")
         self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 2)
         self.assertEqual(protected.count("call void @obscura_rasp_interlock"), 2)
-        self.assertIn("select i1", protected)
+        self.assertNotIn("select i1", protected)
         self.assertNotIn("obscura_rasp_probe", excluded)
 
     def test_runtime_injection_covers_multiple_function_exits(self) -> None:
@@ -254,7 +254,7 @@ class DefaultPolicyTests(unittest.TestCase):
         protected = self.function_body(process.stdout, "protected_large_cfg")
         self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 3)
         self.assertEqual(protected.count("call void @obscura_rasp_interlock"), 3)
-        self.assertEqual(protected.count("select i1"), 2)
+        self.assertNotIn("select i1", protected)
 
     def test_runtime_injection_respects_probability_and_size_gates(self) -> None:
         disabled = self.run_opt(

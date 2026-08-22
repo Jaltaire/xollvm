@@ -34,21 +34,6 @@ namespace {
 		return mix64(site ^ rotateLeft(challenge, 17) ^ UINT64_C(0x6a09e667f3bcc909));
 	}
 
-	bool eligibleReturnType(Type* type) {
-		return type->isIntegerTy() || type->isFloatingPointTy() ||
-			type->isPointerTy() || type->isVectorTy();
-	}
-
-	Value* corruptedValue(IRBuilder<>& builder, Value* value, uint64_t mask) {
-		Type* type = value->getType();
-		if (type->isIntegerTy()) {
-			auto* integerType = cast<IntegerType>(type);
-			return builder.CreateXor(value, ConstantInt::get(integerType, mask));
-		}
-		if (type->isFloatingPointTy() || type->isPointerTy() || type->isVectorTy())
-			return Constant::getNullValue(type);
-		return value;
-	}
 }
 
 PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager& AM) {
@@ -97,8 +82,6 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 		ConstantInt::get(i64, entrySite), ConstantInt::get(i64, entryChallenge), callerAddress});
 	entryBuilder.CreateCall(interlock, {
 		ConstantInt::get(i64, entrySite), entryObserved, ConstantInt::get(i64, entryExpected)});
-	Value* entryClean = entryBuilder.CreateICmpEQ(entryObserved, ConstantInt::get(i64, entryExpected));
-
 	SmallVector<ReturnInst*, 8> returns;
 	for (BasicBlock& block : F)
 		if (auto* returnInstruction = dyn_cast<ReturnInst>(block.getTerminator()))
@@ -115,13 +98,6 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 			ConstantInt::get(i64, exitSite), ConstantInt::get(i64, exitChallenge), callerAddress});
 		builder.CreateCall(interlock, {
 			ConstantInt::get(i64, exitSite), exitObserved, ConstantInt::get(i64, exitExpected)});
-		Value* exitClean = builder.CreateICmpEQ(exitObserved, ConstantInt::get(i64, exitExpected));
-		Value* clean = builder.CreateAnd(entryClean, exitClean);
-		Value* returned = returnInstruction->getReturnValue();
-		if (returned && eligibleReturnType(returned->getType())) {
-			Value* corrupted = corruptedValue(builder, returned, mix64(exitSite ^ exitChallenge));
-			returnInstruction->setOperand(0, builder.CreateSelect(clean, returned, corrupted));
-		}
 	}
 
 	return PreservedAnalyses::none();
