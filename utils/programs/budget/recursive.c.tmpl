@@ -1,0 +1,26 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint32_t obf_target(uint32_t x, uint32_t y) {{
+    if (x < 2u) {{
+        return y ^ (x * 17u);
+    }}
+    uint32_t left = obf_target(x - 1u, y ^ x);
+    uint32_t right = obf_target(x - 2u, y + x);
+    switch ((left ^ right ^ x) & 3u) {{
+        case 0u: return (left + right) ^ y;
+        case 1u: return (left * 3u) + right;
+        case 2u: return (right * 5u) ^ left;
+        default: return left - right + y;
+    }}
+}}
+
+int main(int argc, char** argv) {{
+    uint32_t x = (argc > 1) ? (uint32_t)strtoul(argv[1], 0, 0) : 7u;
+    uint32_t y = (argc > 2) ? (uint32_t)strtoul(argv[2], 0, 0) : 11u;
+    uint32_t result = obf_target((x % 8u) + 1u, y);
+    printf("R=%u\n", result);
+    return (int)(result & 0xFFu);
+}}

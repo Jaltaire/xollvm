@@ -8,6 +8,8 @@ unrelated regressions still surface.
 
 from __future__ import annotations
 
+import programs
+
 from ._common import Registry, ann_extra
 
 
@@ -51,6 +53,14 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(
         name="rt_budget_transaction", passes=["flattening"],
         ann_override="obf: flattening(minBlocks=3,maxBlocks=200,budget=1,budgetMax=256)",
+        gates=["budget_hardcap_256"], category="budget",
+        expect_no_skips=True, allowed_skip_reasons=_BUDGET_OK,
+    )
+    recursive_annotation = "obf: flattening(minBlocks=3,maxBlocks=200,budget=1,budgetMax=256)"
+    reg.add(
+        name="rt_budget_transaction_recursive", passes=["flattening"],
+        ann_override=recursive_annotation,
+        src_override=programs.render("budget.recursive", annotation=recursive_annotation),
         gates=["budget_hardcap_256"], category="budget",
         expect_no_skips=True, allowed_skip_reasons=_BUDGET_OK,
     )

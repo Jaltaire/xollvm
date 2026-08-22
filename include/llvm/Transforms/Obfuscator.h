@@ -10,8 +10,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
-#include <memory>
-
 #include "llvm/Transforms/Obfuscator/AntiOptimizationShield.h"
 #include "llvm/Transforms/Obfuscator/EHUtils.h"
 #include "llvm/Transforms/Obfuscator/FunctionMerging.h"
@@ -34,18 +32,18 @@ namespace llvm {
 
 	class ObfuscationFunctionDriverPass
 		: public PassInfoMixin<ObfuscationFunctionDriverPass> {
-		static std::unique_ptr<Function> snapshotFunction(Function& F) {
+		static Function* snapshotFunction(Function& F) {
 			ValueToValueMapTy VMap;
 			Function* Snapshot = CloneFunction(&F, VMap);
 			Snapshot->setName(F.getName() + ".obscura-budget-snapshot");
-			Snapshot->removeFromParent();
-			return std::unique_ptr<Function>(Snapshot);
+			return Snapshot;
 		}
 
 		static void restoreFunction(Function& F, Function& Snapshot) {
 			F.deleteBody();
 			F.copyAttributesFrom(&Snapshot);
 			ValueToValueMapTy VMap;
+			VMap[&Snapshot] = &F;
 			auto Destination = F.arg_begin();
 			for (const Argument& Source : Snapshot.args())
 				VMap[&Source] = &*Destination++;
@@ -340,9 +338,7 @@ namespace llvm {
 
 				uint64_t PassSeed = llvm::obf::deriveSeed(FnSeed, Entry.Name);
 				Budget.recordPassStart(Entry.Name, CurrentInsts, PassSeed);
-				std::unique_ptr<Function> Snapshot;
-				if (Budget.isEnabled())
-					Snapshot = snapshotFunction(F);
+				Function* Snapshot = Budget.isEnabled() ? snapshotFunction(F) : nullptr;
 
 				// --- Run the pass ---
 				PreservedAnalyses PA = Entry.Run(F, FAM);
@@ -377,10 +373,6 @@ namespace llvm {
 				if (Changed && Entry.NeedsSSARepair)
 					llvm::obf::ObfRepairSSAFunctionPass(Entry.Name).run(F, FAM);
 
-				// --- Optional verify ---
-				if (ObfVerify && Changed)
-					llvm::obf::ObfVerifyFunctionPass(Entry.Name).run(F, FAM);
-
 				// --- Record post-pass instruction count ---
 				unsigned AfterInsts = llvm::obf::countInstructions(F);
 				bool RolledBack = false;
@@ -395,6 +387,13 @@ namespace llvm {
 					RolledBack = true;
 					FAM.invalidate(F, PreservedAnalyses::none());
 				}
+
+				// --- Optional verify ---
+				if (ObfVerify && Changed)
+					llvm::obf::ObfVerifyFunctionPass(Entry.Name).run(F, FAM);
+				if (Snapshot)
+					Snapshot->eraseFromParent();
+
 				Budget.recordPassEnd(AfterInsts, Changed);
 				if (RolledBack)
 					Budget.markLastRecordSkipped("budget_exceeded_rolled_back");
