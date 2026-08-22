@@ -1341,6 +1341,12 @@ namespace {
         for (auto& Entry : ByFn) {
             Function* F = Entry.first;
             SmallVectorImpl<CandInj>& CandsForFn = Entry.second;
+            unsigned PersistentCount = llvm::count_if(
+                CandsForFn, [](const CandInj& Candidate) {
+                    return Candidate.Persistent;
+                });
+            bool InlinePersistentCalls =
+                PersistentCount <= 2 && F->getInstructionCount() <= 1000;
 
             Instruction* IP = &*F->getEntryBlock().getFirstInsertionPt();
             IRBuilder<> B(IP);
@@ -1424,7 +1430,8 @@ namespace {
                     CallInst* LazyCall = LazyInsertPt
                         ? IRBuilder<>(LazyInsertPt).CreateCall(ci.LazyFn, { KeyPtr })
                         : B.CreateCall(ci.LazyFn, { KeyPtr });
-                    LazyCalls.push_back(LazyCall);
+                    if (InlinePersistentCalls)
+                        LazyCalls.push_back(LazyCall);
                     ++DecryptCallsInserted;
                     Changed = true;
                     continue;
@@ -1557,8 +1564,11 @@ namespace {
         }
 
         for (Function* LazyFn : LazyFns)
-            if (LazyFn->use_empty())
+            if (LazyFn->use_empty()) {
                 LazyFn->eraseFromParent();
+            } else {
+                LazyFn->addFnAttr(Attribute::NoInline);
+            }
 
         // linkStub() pulls in the WHOLE aes stub, including the AES decrypt
         // chain (__aes_decrypt → __obf_aes_ctr_decrypt, plus extern

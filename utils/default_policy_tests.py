@@ -226,6 +226,24 @@ entry:
 }
 """
 
+MANY_ESCAPING_STRINGS_IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+@first_message = private unnamed_addr constant [15 x i8] c"first-message!\\00"
+@second_message = private unnamed_addr constant [16 x i8] c"second-message!\\00"
+@third_message = private unnamed_addr constant [15 x i8] c"third-message!\\00"
+
+declare void @consume(ptr)
+
+define void @protected_many_strings() {
+entry:
+  call void @consume(ptr @first_message)
+  call void @consume(ptr @second_message)
+  call void @consume(ptr @third_message)
+  ret void
+}
+"""
+
 POLICY_ENVIRONMENT = {
     "XOLLVM_DEFAULT_CONFIG",
     "XOLLVM_DEFAULT_INCLUDE",
@@ -523,6 +541,26 @@ entry:
         self.assertIn("acq_rel acquire", process.stdout)
         self.assertIn("store atomic i32 2", process.stdout)
         self.assertIn("load atomic i32", process.stdout)
+        self.assertNotIn("define private void @__strenc_lazy_", process.stdout)
+
+    def test_many_escaping_strings_retain_private_materializers(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "strenc(minlen=4,cipher=chacha)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_",
+                "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "100",
+                "XOLLVM_IR_BUDGET_MAX": "20000",
+                "XOLLVM_MAX_FUNCTION_INSTRUCTIONS": "20000",
+            },
+            source_ir=MANY_ESCAPING_STRINGS_IR,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_many_strings")
+        self.assertIn("call void @__strenc_lazy_", protected)
+        self.assertIn("define private void @__strenc_lazy_", process.stdout)
+        self.assertNotIn("@llvm.global_ctors", process.stdout)
+        self.assertLess(len(protected.splitlines()), 1000)
 
     def run_runtime_policy(self, specification: str) -> bytes:
         environment = self.process_environment(
