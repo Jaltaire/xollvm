@@ -44,8 +44,8 @@ ObfuscationPipeline::getOrderingRules() {
 	};
 
 	rules["rasp"] = PassOrderingRules{
-		{},
-		{"constenc","mba","substitution","split","sdiff","bcf","flattening","vcall","vm","shield","adec"},
+		{"vm"},
+		{"constenc","mba","substitution","split","sdiff","bcf","flattening","vcall","shield","adec"},
 		{}
 	};
 
@@ -141,11 +141,14 @@ ObfuscationPipeline::getOrderingRules() {
 
 	rules["vm"] = PassOrderingRules{
 		// vm rewrites the function body into a bytecode interpreter and
-		// builds a static callee table. It must run *before* vcall —
+		// builds a static callee table. It must run *before* rasp and vcall —
+		// rasp deliberately introduces caller-state intrinsics that the VM
+		// cannot safely encode into a portable bytecode program. Running VM
+		// first lets rasp protect the generated interpreter and wrapper.
 		// after vcall the call sites have indirect (runtime) callees,
 		// which vm cannot emit into its constant CalleeTab.
 		/*before=*/ {"mba", "substitution", "split", "sdiff", "bcf"},
-		/*after=*/  {"vcall", "shield", "adec"},
+		/*after=*/  {"rasp", "vcall", "shield", "adec"},
 		/*conflicts=*/ {"flattening"},  // both restructure the whole CFG
     };
 

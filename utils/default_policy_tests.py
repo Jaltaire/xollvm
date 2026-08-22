@@ -378,6 +378,26 @@ entry:
         self.assertEqual(first_body, repeated_body)
         self.assertNotEqual(first_body, different_body)
 
+    def test_virtualization_precedes_runtime_injection(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=1),"
+                    "vm(preset=max,budget=4096,budgetMax=30000)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "10000",
+                "XOLLVM_IR_BUDGET_MAX": "30000",
+            },
+            ("--obf-seed=145",),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_function")
+        self.assertIn("__vm_", process.stdout)
+        self.assertIn("obscura_rasp_probe_", protected)
+        self.assertIn("obscura_rasp_interlock_", protected)
+
     @staticmethod
     def function_body(ir: str, name: str) -> str:
         match = re.search(rf"define [^\n]* @{name}\(.*?^\}}", ir, re.MULTILINE | re.DOTALL)
