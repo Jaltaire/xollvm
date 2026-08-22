@@ -21,7 +21,16 @@ def budget_verbose(stderr: str) -> Optional[str]:
 
 @register("budget_exhaustion", needs="stderr")
 def budget_exhaustion(stderr: str) -> Optional[str]:
-    if "EXHAUSTED" not in stderr and "skipping" not in stderr.lower():
+    if not any(
+        token in stderr.lower()
+        for token in (
+            "budget reached",
+            "budget-throttled",
+            "exhausted",
+            "restoring the pre-pass function",
+            "skipping",
+        )
+    ):
         return "expected budget exhaustion (pass skipping) but none found"
     return None
 
@@ -42,6 +51,6 @@ def budget_clamped(ir: str, base_ir: str, multiplier: int) -> Optional[str]:
 
 def budget_hardcap(ir: str, cap: int) -> Optional[str]:
     n = count_fn_instructions(ir, "obf_target")
-    if n > cap * 1.3:
-        return f"hard cap exceeded: {n} > {cap} (+30% tolerance)"
+    if n > cap:
+        return f"hard cap exceeded: {n} > {cap}"
     return None

@@ -11,7 +11,7 @@ from __future__ import annotations
 from ._common import Registry, ann_extra
 
 
-_BUDGET_OK = {"budget_exhausted"}
+_BUDGET_OK = {"budget_exceeded_rolled_back", "budget_exhausted"}
 
 
 def register(reg: Registry, **_opts) -> None:
@@ -32,7 +32,7 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(
         name="rt_budget_exhaust", passes=["mba", "bcf", "substitution"],
         ann_override=ann_extra("budget_low"),
-        extra_opts=["--obf-ir-budget-multiplier=3", "--obf-verbose"],
+        extra_opts=["--obf-ir-budget-multiplier=1", "--obf-verbose"],
         gates=["budget_exhaustion"], category="budget",
         expect_no_skips=True, allowed_skip_reasons=_BUDGET_OK,
     )
@@ -46,5 +46,11 @@ def register(reg: Registry, **_opts) -> None:
         ann_override=ann_extra("budget_low"),
         extra_opts=["--obf-ir-budget-multiplier=100", "--obf-ir-budget-max=2000"],
         gates=["budget_hardcap_2000"], category="budget",
+        expect_no_skips=True, allowed_skip_reasons=_BUDGET_OK,
+    )
+    reg.add(
+        name="rt_budget_transaction", passes=["flattening"],
+        ann_override="obf: flattening(minBlocks=3,maxBlocks=200,budget=1,budgetMax=256)",
+        gates=["budget_hardcap_256"], category="budget",
         expect_no_skips=True, allowed_skip_reasons=_BUDGET_OK,
     )

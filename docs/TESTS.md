@@ -229,6 +229,7 @@ Common reason tokens currently emitted:
 - `flatten_failed` — `flattening` ran but inner CFG rewrite returned false
 - `invalid_loop_count`, `invalid_num_param` — pass-config validation
 - `budget_exhausted` — driver IR budget gate
+- `budget_exceeded_rolled_back` — post-pass transactional budget enforcement
 - `cap_max_function_insts`, `cap_max_function_blocks`,
   `cap_max_loop_depth` — function-level caps
 

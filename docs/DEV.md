@@ -209,9 +209,12 @@ Limit = clamp(insts_before × multiplier, 1, hardcap)
 
 Each pass consumes from the remaining budget as the instruction count grows.
 When the budget is exhausted (or the hard cap is hit), later passes in the pipeline
-may be skipped. Budget state and utilization are recorded in the report JSON.
+may be skipped. If a pass exceeds the ceiling, the driver restores the complete
+pre-pass function state before continuing. Budget state, utilization, and rollback
+reasons are recorded in the report JSON.
 
 Global knobs: `-obf-ir-budget-multiplier` (default 50×), `-obf-ir-budget-max` (default 0 = no hard cap).
+Function annotations may override them with `budget=N` and `budgetMax=N`.
 
 ---
 

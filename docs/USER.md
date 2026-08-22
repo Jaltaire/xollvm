@@ -245,8 +245,10 @@ opt -passes=obf-metrics -S test.ll -o /dev/null > metrics.jsonl
 | `-obf-ir-budget-max=<N>` | 0 (off) | Absolute IR instruction ceiling per function. 0 = no hard cap. |
 
 > [!NOTE]
-> Budget knobs are global — they cannot currently be expressed as per-function annotation tokens.
-> Use the command-line options above to tune budgets globally.
+> The `budget=N` and `budgetMax=N` parameters override these settings for an
+> annotated function. When a pass exceeds the effective ceiling, the driver
+> restores the function to its pre-pass state and records the
+> `budget_exceeded_rolled_back` skip reason.
 
 ### Pipeline ordering overrides
 

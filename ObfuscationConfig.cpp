@@ -272,6 +272,10 @@ ObfuscationConfig AnnotationParser::parseAnnotations(Function* F) {
 		if (ObfVerbose) errs() << "  Parsing: '" << ann << "'\n";
 
 		ObfuscationConfig parsedConfig = parseAnnotationString(ann);
+		if (parsedConfig.budgetMultiplier != 0)
+			finalConfig.budgetMultiplier = parsedConfig.budgetMultiplier;
+		if (parsedConfig.budgetHardCap != 0)
+			finalConfig.budgetHardCap = parsedConfig.budgetHardCap;
 
 		// Merge into final config
 		for (auto& pc : parsedConfig.passes) {

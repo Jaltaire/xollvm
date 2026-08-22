@@ -8,6 +8,9 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+
+#include <memory>
 
 #include "llvm/Transforms/Obfuscator/AntiOptimizationShield.h"
 #include "llvm/Transforms/Obfuscator/EHUtils.h"
@@ -31,6 +34,27 @@ namespace llvm {
 
 	class ObfuscationFunctionDriverPass
 		: public PassInfoMixin<ObfuscationFunctionDriverPass> {
+		static std::unique_ptr<Function> snapshotFunction(Function& F) {
+			ValueToValueMapTy VMap;
+			Function* Snapshot = CloneFunction(&F, VMap);
+			Snapshot->setName(F.getName() + ".obscura-budget-snapshot");
+			Snapshot->removeFromParent();
+			return std::unique_ptr<Function>(Snapshot);
+		}
+
+		static void restoreFunction(Function& F, Function& Snapshot) {
+			F.deleteBody();
+			F.copyAttributesFrom(&Snapshot);
+			ValueToValueMapTy VMap;
+			auto Destination = F.arg_begin();
+			for (const Argument& Source : Snapshot.args())
+				VMap[&Source] = &*Destination++;
+			SmallVector<ReturnInst*, 8> Returns;
+			CloneFunctionInto(&F, &Snapshot, VMap,
+				CloneFunctionChangeType::LocalChangesOnly, Returns);
+			F.setLinkage(Snapshot.getLinkage());
+		}
+
 	public:
 		PreservedAnalyses run(Function& F, FunctionAnalysisManager& FAM) {
 			if (F.isDeclaration())
@@ -316,15 +340,16 @@ namespace llvm {
 
 				uint64_t PassSeed = llvm::obf::deriveSeed(FnSeed, Entry.Name);
 				Budget.recordPassStart(Entry.Name, CurrentInsts, PassSeed);
+				std::unique_ptr<Function> Snapshot;
+				if (Budget.isEnabled())
+					Snapshot = snapshotFunction(F);
 
 				// --- Run the pass ---
 				PreservedAnalyses PA = Entry.Run(F, FAM);
 				bool Changed = !PA.areAllPreserved();
 
-				if (Changed) {
-					AnyChanged = true;
+				if (Changed)
 					FAM.invalidate(F, PA);
-				}
 
 				// --- Pass-published skip channel ---
 				// Refresh FOC handle (analyses may have been invalidated above).
@@ -358,7 +383,29 @@ namespace llvm {
 
 				// --- Record post-pass instruction count ---
 				unsigned AfterInsts = llvm::obf::countInstructions(F);
+				bool RolledBack = false;
+				if (Snapshot && AfterInsts > Budget.limit()) {
+					if (ObfVerbose)
+						errs() << "[budget] " << F.getName() << ": pass '" << Entry.Name
+							<< "' exceeded the hard limit (" << AfterInsts << " > "
+							<< Budget.limit() << "); restoring the pre-pass function.\n";
+					restoreFunction(F, *Snapshot);
+					AfterInsts = llvm::obf::countInstructions(F);
+					Changed = false;
+					RolledBack = true;
+					FAM.invalidate(F, PreservedAnalyses::none());
+				}
 				Budget.recordPassEnd(AfterInsts, Changed);
+				if (RolledBack)
+					Budget.markLastRecordSkipped("budget_exceeded_rolled_back");
+				if (RolledBack && llvm::ObfNoSkips) {
+					report_fatal_error(
+						Twine("obfuscator: -obf-no-skips: pass '") + Entry.Name
+						+ "' exceeded the IR budget on '" + F.getName() + "'",
+						false);
+				}
+				if (Changed)
+					AnyChanged = true;
 
 				// --- Optional per-pass CFG snapshot (diff-colored vs previous stage) ---
 				if (Reporting && Sink && !ReportDir.empty()) {

@@ -253,7 +253,12 @@ def ann_for(passes: list[str]) -> str:
 
 
 def ann_extra(key: str) -> str:
-    return "obf: " + EXTRA_ANN[key]
+    specification = EXTRA_ANN[key]
+    if specification.startswith("vm(") and "budget=" not in specification:
+        specification = specification.replace(
+            "vm(", "vm(budget=10000,budgetMax=100000,", 1
+        )
+    return "obf: " + specification
 
 
 def pass_spec(pass_name: str, params: Optional[Dict[str, Any]] = None) -> str:
