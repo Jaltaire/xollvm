@@ -50,6 +50,13 @@ exit:
   ret i32 %result
 }
 
+define i8 @protected_narrow_bool(i64 %value) {
+entry:
+  %condition = icmp ugt i64 %value, 7
+  %result = zext i1 %condition to i8
+  ret i8 %result
+}
+
 define void @protected_c_string() {
 entry:
   call void @consume(ptr @c_string, i64 8)
@@ -282,7 +289,7 @@ class DefaultPolicyTests(unittest.TestCase):
 
     @staticmethod
     def function_body(ir: str, name: str) -> str:
-        match = re.search(rf"define i32 @{name}\(.*?^\}}", ir, re.MULTILINE | re.DOTALL)
+        match = re.search(rf"define [^\n]* @{name}\(.*?^\}}", ir, re.MULTILINE | re.DOTALL)
         if match is None:
             raise AssertionError(f"The function {name} was absent from the output IR.")
         return match.group(0)
@@ -434,6 +441,21 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertNotIn("add i32 %value, 7", replaced)
         self.assertIn("__vm_", process.stdout)
         self.assertNotIn("br i1 %condition, label %left, label %right", defaulted)
+
+    def test_vm_virtualizes_boolean_extensions_into_narrow_integer_results(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "vm(preset=high)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_narrow_bool$",
+                "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "1000",
+                "XOLLVM_IR_BUDGET_MAX": "20000",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_narrow_bool")
+        self.assertNotIn("zext i1 %condition to i8", body)
+        self.assertIn("__vm_", process.stdout)
 
     def test_vm_runtime_symbols_do_not_collide_between_modules(self) -> None:
         environment = self.process_environment(

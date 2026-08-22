@@ -89,7 +89,8 @@ uint32_t BytecodeEmitter::isize(Instruction* I) {
 
 	if (Op == Instruction::ZExt) {
 		unsigned W = I->getOperand(0)->getType()->getIntegerBitWidth();
-		if (Ty->isIntegerTy(32) && (W == 1 || W == 8 || W == 16)) return 4;
+		if (Ty->isIntegerTy() && Ty->getIntegerBitWidth() <= 32 &&
+			(W == 1 || W == 8 || W == 16)) return 4;
 		if (Ty->isIntegerTy(64) && (W == 1 || W == 8 || W == 16 || W == 32)) return 4;
 		markUnsupported(I); return 0;
 	}
@@ -633,7 +634,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 
 	if (Op == Instruction::ZExt) {
 		unsigned W = I->getOperand(0)->getType()->getIntegerBitWidth();
-		if (Ty->isIntegerTy(32)) {
+		if (Ty->isIntegerTy() && Ty->getIntegerBitWidth() <= 32) {
 			if (W != 1 && W != 8 && W != 16) { markUnsupported(I); return; }
 			CastKind K = (W == 1) ? CK_ZEXT1 : (W == 8) ? CK_ZEXT8 : CK_ZEXT16;
 			bop(OP_CAST); b8(xorSalt(newVR(I))); b8(xorSalt(vr(I->getOperand(0)))); b8(encCastKind((uint8_t)K)); return;
