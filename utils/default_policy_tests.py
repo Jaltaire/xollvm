@@ -248,10 +248,10 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         protected = self.function_body(process.stdout, "protected_function")
         excluded = self.function_body(process.stdout, "excluded_function")
-        self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 2)
+        self.assertEqual(protected.count("call i64 @obscura_rasp_probe_"), 2)
         self.assertEqual(protected.count("call void @obscura_rasp_interlock_"), 2)
         self.assertNotIn("select i1", protected)
-        self.assertNotIn("obscura_rasp_probe", excluded)
+        self.assertNotIn("obscura_rasp_probe_", excluded)
 
     def test_runtime_injection_covers_multiple_function_exits(self) -> None:
         process = self.run_opt(
@@ -266,7 +266,7 @@ class DefaultPolicyTests(unittest.TestCase):
         )
         self.assertEqual(process.returncode, 0, process.stderr)
         protected = self.function_body(process.stdout, "protected_large_cfg")
-        self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 3)
+        self.assertEqual(protected.count("call i64 @obscura_rasp_probe_"), 3)
         self.assertEqual(protected.count("call void @obscura_rasp_interlock_"), 3)
         self.assertNotIn("select i1", protected)
 
@@ -283,9 +283,9 @@ class DefaultPolicyTests(unittest.TestCase):
         )
         self.assertEqual(process.returncode, 0, process.stderr)
         protected = self.function_body(process.stdout, "protected_internal_cfg")
-        self.assertEqual(protected.count("call i64 @obscura_rasp_probe"), 3)
+        self.assertEqual(protected.count("call i64 @obscura_rasp_probe_"), 3)
         self.assertEqual(protected.count("call void @obscura_rasp_interlock_"), 3)
-        self.assertIn("obscura_rasp_probe", protected.split("middle:", 1)[1])
+        self.assertIn("obscura_rasp_probe_", protected.split("middle:", 1)[1])
 
     def test_runtime_injection_can_semantically_interlock_integer_results(self) -> None:
         process = self.run_opt(
@@ -308,7 +308,7 @@ class DefaultPolicyTests(unittest.TestCase):
 
     def test_runtime_injection_excludes_the_runtime_abi_module(self) -> None:
         runtime_ir = IR + """
-define i64 @obscura_rasp_probe(i64 %site, i64 %challenge, i64 %caller) {
+define i64 @obscura_rasp_probe_0(i64 %site, i64 %challenge, i64 %caller) {
 entry:
   ret i64 %challenge
 }
@@ -330,7 +330,7 @@ entry:
         )
         self.assertEqual(process.returncode, 0, process.stderr)
         protected = self.function_body(process.stdout, "protected_function")
-        self.assertNotIn("obscura_rasp_probe", protected)
+        self.assertNotIn("obscura_rasp_probe_", protected)
         self.assertNotIn("obscura_rasp_interlock_", protected)
 
     def test_runtime_injection_respects_probability_and_size_gates(self) -> None:

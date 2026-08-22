@@ -61,7 +61,7 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 	if (F.isDeclaration() || F.empty() || F.getName().contains("obscura_rasp_") ||
 		F.hasFnAttribute(Attribute::Naked))
 		return PreservedAnalyses::all();
-	Function* runtimeProbe = F.getParent()->getFunction("obscura_rasp_probe");
+	Function* runtimeProbe = F.getParent()->getFunction("obscura_rasp_probe_0");
 	if (runtimeProbe && !runtimeProbe->isDeclaration())
 		return PreservedAnalyses::all();
 
@@ -88,13 +88,17 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 	FunctionType* probeType = FunctionType::get(i64, {i64, i64, i64}, false);
 	FunctionType* interlockType = FunctionType::get(
 		Type::getVoidTy(llvmContext), {i64, i64, i64}, false);
-	FunctionCallee probe = module.getOrInsertFunction("obscura_rasp_probe", probeType);
+	SmallVector<FunctionCallee, 8> probes;
+	for (unsigned lane = 0; lane < 8; ++lane)
+		probes.push_back(module.getOrInsertFunction(
+			("obscura_rasp_probe_" + Twine(lane)).str(), probeType));
 	SmallVector<FunctionCallee, 4> interlocks;
 	for (unsigned lane = 0; lane < 4; ++lane)
 		interlocks.push_back(module.getOrInsertFunction(
 			("obscura_rasp_interlock_" + Twine(lane)).str(), interlockType));
-	if (auto* function = dyn_cast<Function>(probe.getCallee()))
-		function->addFnAttr(Attribute::NoUnwind);
+	for (FunctionCallee probe : probes)
+		if (auto* function = dyn_cast<Function>(probe.getCallee()))
+			function->addFnAttr(Attribute::NoUnwind);
 	for (FunctionCallee interlock : interlocks)
 		if (auto* function = dyn_cast<Function>(interlock.getCallee()))
 			function->addFnAttr(Attribute::NoUnwind);
@@ -108,7 +112,7 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 	uint64_t entrySite = mix64(passSeed ^ UINT64_C(0x243f6a8885a308d3));
 	uint64_t entryChallenge = mix64(passSeed ^ UINT64_C(0x13198a2e03707344));
 	uint64_t entryExpected = expectedResponse(entrySite, entryChallenge);
-	Value* entryObserved = entryBuilder.CreateCall(probe, {
+	Value* entryObserved = entryBuilder.CreateCall(probes[mix64(passSeed) & 7], {
 		ConstantInt::get(i64, entrySite), ConstantInt::get(i64, entryChallenge), callerAddress});
 	entryBuilder.CreateCall(interlocks[mix64(passSeed) & 3], {
 		ConstantInt::get(i64, entrySite), entryObserved, ConstantInt::get(i64, entryExpected)});
@@ -129,7 +133,8 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 			builder.CreateOr(builder.CreateShl(entryObserved, 23),
 				builder.CreateLShr(entryObserved, 41)));
 		Value* expected = emitExpectedResponse(builder, site, challenge);
-		Value* observed = builder.CreateCall(probe, {site, challenge, callerAddress});
+		Value* observed = builder.CreateCall(
+			probes[mix64(passSeed ^ salt ^ ordinal) & 7], {site, challenge, callerAddress});
 		builder.CreateCall(interlocks[mix64(passSeed ^ salt ^ ordinal) & 3], {
 			site, observed, expected});
 		Value* difference = builder.CreateXor(observed, expected);
