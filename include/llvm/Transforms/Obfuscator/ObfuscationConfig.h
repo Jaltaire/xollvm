@@ -308,6 +308,7 @@ namespace llvm {
 		unsigned maximumExitSites = 2;
 		unsigned maximumBlockSites = 2;
 		bool semanticReturns = false;
+		bool allowRuntimeModule = false;
 
 		static RuntimeInjectionConfig fromPassConfig(const PassConfig& pc);
 		bool validate() const;

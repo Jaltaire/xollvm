@@ -61,9 +61,6 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 	if (F.isDeclaration() || F.empty() || F.getName().contains("obscura_rasp_") ||
 		F.hasFnAttribute(Attribute::Naked))
 		return PreservedAnalyses::all();
-	Function* runtimeProbe = F.getParent()->getFunction("obscura_rasp_probe_0");
-	if (runtimeProbe && !runtimeProbe->isDeclaration())
-		return PreservedAnalyses::all();
 
 	const auto& cache = getObfCache(F, AM);
 	auto passConfig = cache.getConfig(F).getPassConfig("rasp");
@@ -71,6 +68,9 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 		return PreservedAnalyses::all();
 	RuntimeInjectionConfig config = RuntimeInjectionConfig::fromPassConfig(*passConfig);
 	if (!config.enable || !config.validate())
+		return PreservedAnalyses::all();
+	Function* runtimeProbe = F.getParent()->getFunction("obscura_rasp_probe_0");
+	if (runtimeProbe && !runtimeProbe->isDeclaration() && !config.allowRuntimeModule)
 		return PreservedAnalyses::all();
 
 	auto& context = *AM.getResult<FunctionObfContextAnalysis>(F);

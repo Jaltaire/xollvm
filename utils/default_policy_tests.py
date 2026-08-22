@@ -378,6 +378,36 @@ entry:
         self.assertNotIn("obscura_rasp_probe_", protected)
         self.assertNotIn("obscura_rasp_interlock_", protected)
 
+    def test_runtime_injection_can_protect_selected_runtime_module_functions(self) -> None:
+        runtime_ir = IR + """
+define i64 @obscura_rasp_probe_0(i64 %site, i64 %challenge, i64 %caller) {
+entry:
+  ret i64 %challenge
+}
+
+define void @obscura_rasp_interlock_0(i64 %site, i64 %observed, i64 %expected) {
+entry:
+  ret void
+}
+"""
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=2,"
+                    "allowRuntimeModule=1)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_function$",
+                "XOLLVM_VERIFY_IR": "1",
+            },
+            source_ir=runtime_ir,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_function")
+        probe = self.function_body(process.stdout, "obscura_rasp_probe_0")
+        self.assertIn("obscura_rasp_probe_", protected)
+        self.assertIn("obscura_rasp_interlock_", protected)
+        self.assertNotIn("call i64 @obscura_rasp_probe_", probe)
+
     def test_runtime_injection_respects_probability_and_size_gates(self) -> None:
         disabled = self.run_opt(
             {

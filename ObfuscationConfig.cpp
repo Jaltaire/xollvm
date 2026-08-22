@@ -1241,6 +1241,8 @@ RuntimeInjectionConfig RuntimeInjectionConfig::fromPassConfig(const PassConfig& 
 			cfg.maximumBlockSites = (unsigned)std::stoul(pc.params.at("maxBlockSites"));
 		if (pc.params.count("semanticReturns"))
 			cfg.semanticReturns = pc.params.at("semanticReturns") != "0";
+		if (pc.params.count("allowRuntimeModule"))
+			cfg.allowRuntimeModule = pc.params.at("allowRuntimeModule") != "0";
 	}
 	catch (const std::exception& e) {
 		errs() << "Runtime injection parameters are invalid. " << e.what() << "\n";
