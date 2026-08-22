@@ -781,8 +781,10 @@ int licensed(int key, int data) { return key ^ data; }
 ### strenc
 
 String encryption — **module-only** pass. Finds string literal globals whose length meets the
-minimum threshold and encrypts them at compile time. A `.init_array` constructor decrypts
-them at process load time.
+minimum threshold and encrypts them at compile time. Direct-use strings are decrypted into
+temporary stack storage near their first use and scrubbed before the function returns when the
+control-flow shape permits it. Strings whose addresses escape remain encrypted in process-lifetime
+storage until an actual use reaches a thread-safe, one-time materialization site.
 
 Three ciphers are available via the `cipher` key:
 

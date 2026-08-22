@@ -41,10 +41,14 @@ def strenc_key_providers(obf_ir: str) -> Optional[str]:
 
 @register("strenc_keysplit_sections")
 def strenc_keysplit_sections(obf_ir: str) -> Optional[str]:
-    missing = [sec for sec in (".strenc.kd", ".strenc.kt")
-               if sec not in obf_ir]
+    required = {
+        "key data": (".strenc.kd", "__DATA,__strenc_kd"),
+        "key text": (".strenc.kt", "__TEXT,__strenc_kt"),
+    }
+    missing = [name for name, sections in required.items()
+               if not any(section in obf_ir for section in sections)]
     if missing:
-        return f"key-split section(s) missing from IR: {', '.join(missing)}"
+        return f"The key-split IR is missing these sections: {', '.join(missing)}."
     return None
 
 

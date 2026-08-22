@@ -1133,11 +1133,15 @@ namespace {
             ArrayType* NonceTy;       // NonceGV value type
             uint64_t CtBytes;
             bool Persistent;
+            Function* LazyFn;
+            SmallVector<Instruction*, 8> Uses;
         };
 
         llvm::MapVector<Function*, SmallVector<CandInj, 4>> ByFn;
         SmallVector<GlobalVariable*, 16> AllCandGVs;
-        Function* RuntimeCtor = nullptr;
+        SmallVector<CallInst*, 16> DecCalls;
+        SmallVector<CallInst*, 16> LazyCalls;
+        SmallVector<Function*, 16> LazyFns;
 
         for (auto& Cand : Cands) {
             GlobalVariable* GV = Cand.GV;
@@ -1204,26 +1208,105 @@ namespace {
                 return !isa<Instruction>(U);
                 });
             if (HasIndirectUsers) {
-                if (!RuntimeCtor) {
-                    FunctionType* CtorTy = FunctionType::get(Type::getVoidTy(C), false);
-                    RuntimeCtor = Function::Create(
-                        CtorTy, GlobalValue::PrivateLinkage,
-                        "__strenc_runtime_init", M);
-                    BasicBlock* Entry = BasicBlock::Create(C, "entry", RuntimeCtor);
-                    IRBuilder<> CtorBuilder(Entry);
-                    CtorBuilder.CreateRetVoid();
-                    appendToGlobalCtors(M, RuntimeCtor, 0);
-                }
                 GlobalVariable* RuntimeGV = new GlobalVariable(
                     M, CtTy, false, GlobalValue::PrivateLinkage,
                     ConstantAggregateZero::get(CtTy),
                     ".strenc.rt." + std::to_string(Cand.Index));
                 RuntimeGV->setSection(strencSection(M, "rt", false));
                 RuntimeGV->setAlignment(Align(16));
-                GV->replaceAllUsesWith(RuntimeGV);
-                ByFn[RuntimeCtor].push_back(CandInj{
-                    RuntimeGV, CtGV, NonceGV, CtTy, NonceTy, CtBytes, true
+
+                GlobalVariable* StateGV = new GlobalVariable(
+                    M, I32Ty, false, GlobalValue::PrivateLinkage,
+                    ConstantInt::get(I32Ty, 0),
+                    ".strenc.state." + std::to_string(Cand.Index));
+                StateGV->setSection(strencSection(M, "st", false));
+                StateGV->setAlignment(Align(4));
+
+                FunctionType* LazyTy = FunctionType::get(
+                    Type::getVoidTy(C), { PointerType::getUnqual(C) }, false);
+                Function* LazyFn = Function::Create(
+                    LazyTy, GlobalValue::PrivateLinkage,
+                    "__strenc_lazy_" + std::to_string(Cand.Index), M);
+                LazyFn->addFnAttr(Attribute::NoUnwind);
+
+                BasicBlock* ClaimBB = BasicBlock::Create(C, "claim", LazyFn);
+                BasicBlock* InitBB = BasicBlock::Create(C, "init", LazyFn);
+                BasicBlock* WaitBB = BasicBlock::Create(C, "wait", LazyFn);
+                BasicBlock* DoneBB = BasicBlock::Create(C, "done", LazyFn);
+
+                IRBuilder<> ClaimBuilder(ClaimBB);
+                AtomicCmpXchgInst* Claim = ClaimBuilder.CreateAtomicCmpXchg(
+                    StateGV,
+                    ConstantInt::get(I32Ty, 0),
+                    ConstantInt::get(I32Ty, 1),
+                    MaybeAlign(4), AtomicOrdering::AcquireRelease,
+                    AtomicOrdering::Acquire);
+                Claim->setWeak(false);
+                Value* Acquired = ClaimBuilder.CreateExtractValue(Claim, 1);
+                ClaimBuilder.CreateCondBr(Acquired, InitBB, WaitBB);
+
+                IRBuilder<> InitBuilder(InitBB);
+                Value* Dst = gepI8(InitBuilder, CtTy, RuntimeGV);
+                Value* Src = gepI8(InitBuilder, CtTy, CtGV);
+                InitBuilder.CreateMemCpy(Dst, Align(1), Src, Align(1),
+                    ConstantInt::get(I64Ty, CtBytes));
+                Value* NoncePtr = gepI8(InitBuilder, NonceTy, NonceGV);
+                CallInst* DecCall = InitBuilder.CreateCall(ChaChaDecryptFn, {
+                    Dst,
+                    ConstantInt::get(I32Ty, (uint32_t)CtBytes),
+                    LazyFn->getArg(0),
+                    NoncePtr,
+                    ConstantInt::get(I32Ty, 0)
                     });
+                DecCalls.push_back(DecCall);
+                StoreInst* ReadyStore = InitBuilder.CreateStore(
+                    ConstantInt::get(I32Ty, 2), StateGV);
+                ReadyStore->setAtomic(AtomicOrdering::Release);
+                ReadyStore->setAlignment(Align(4));
+                InitBuilder.CreateBr(DoneBB);
+
+                IRBuilder<> WaitBuilder(WaitBB);
+                LoadInst* ReadyState = WaitBuilder.CreateLoad(I32Ty, StateGV);
+                ReadyState->setAtomic(AtomicOrdering::Acquire);
+                ReadyState->setAlignment(Align(4));
+                Value* Ready = WaitBuilder.CreateICmpEQ(
+                    ReadyState, ConstantInt::get(I32Ty, 2));
+                WaitBuilder.CreateCondBr(Ready, DoneBB, WaitBB);
+
+                IRBuilder<> DoneBuilder(DoneBB);
+                DoneBuilder.CreateRetVoid();
+
+                SmallVector<Instruction*, 8> InstructionUsers;
+                SmallVector<Value*, 16> Worklist;
+                SmallPtrSet<Value*, 32> VisitedValues;
+                SmallPtrSet<Instruction*, 16> VisitedInstructions;
+                Worklist.push_back(GV);
+                VisitedValues.insert(GV);
+                while (!Worklist.empty()) {
+                    Value* Current = Worklist.pop_back_val();
+                    for (User* U : Current->users()) {
+                        if (auto* I = dyn_cast<Instruction>(U)) {
+                            if (VisitedInstructions.insert(I).second)
+                                InstructionUsers.push_back(I);
+                            continue;
+                        }
+                        if (VisitedValues.insert(U).second)
+                            Worklist.push_back(U);
+                    }
+                }
+
+                llvm::MapVector<Function*, SmallVector<Instruction*, 8>> UsesByFn;
+                for (Instruction* I : InstructionUsers)
+                    if (Function* F = I->getFunction())
+                        UsesByFn[F].push_back(I);
+
+                GV->replaceAllUsesWith(RuntimeGV);
+                for (auto& UserEntry : UsesByFn)
+                    ByFn[UserEntry.first].push_back(CandInj{
+                        RuntimeGV, CtGV, NonceGV, CtTy, NonceTy, CtBytes, true,
+                        LazyFn, std::move(UserEntry.second)
+                        });
+                LazyFns.push_back(LazyFn);
                 AllCandGVs.push_back(GV);
                 ++EncryptedStrings;
                 continue;
@@ -1241,7 +1324,8 @@ namespace {
                 if (F->getName().starts_with("__strenc_")) continue;
 
                 ByFn[F].push_back(CandInj{
-                    GV, CtGV, NonceGV, CtTy, NonceTy, CtBytes, false
+                    GV, CtGV, NonceGV, CtTy, NonceTy, CtBytes, false,
+                    nullptr, {}
                     });
             }
 
@@ -1253,12 +1337,6 @@ namespace {
         // The key reconstruction is emitted ONCE per function, first, so it
         // dominates every decrypt cluster that follows in the same block.
         ArrayType* KeyTy = cast<ArrayType>(Ctx.ChaChaKeyGV->getValueType());
-
-        // Phase C: decrypt calls are collected here during emission and
-        // inlined in a separate pass below, after all emission is done.
-        // Inlining during emission would split the caller block at the call
-        // site and invalidate the live, forward-advancing IRBuilder B.
-        SmallVector<CallInst*, 16> DecCalls;
 
         for (auto& Entry : ByFn) {
             Function* F = Entry.first;
@@ -1314,6 +1392,27 @@ namespace {
             // for the rest of this function's processing.
             DominatorTree& DT = FAM.getResult<DominatorTreeAnalysis>(*F);
 
+            auto FindLazyInsertPoint = [&](ArrayRef<Instruction*> Uses) -> Instruction* {
+                if (Uses.empty()) return nullptr;
+                for (Instruction* U : Uses)
+                    if (isa<PHINode>(U) || isa<FuncletPadInst>(U) ||
+                        isa<LandingPadInst>(U) || isa<CatchSwitchInst>(U))
+                        return nullptr;
+
+                BasicBlock* NCD = Uses[0]->getParent();
+                for (Instruction* U : Uses) {
+                    if (!DT.getNode(NCD) || !DT.getNode(U->getParent()))
+                        return nullptr;
+                    NCD = DT.findNearestCommonDominator(NCD, U->getParent());
+                }
+                if (!NCD) return nullptr;
+
+                for (Instruction& I : *NCD)
+                    if (is_contained(Uses, &I))
+                        return &I;
+                return NCD->getTerminator();
+                };
+
             // Note: Buf is emitted below via the same, now-advanced builder
             // B, so it lands after the key-reconstruction instructions
             // rather than at the very top of entry. That is valid IR —
@@ -1321,18 +1420,11 @@ namespace {
             // dominance: do not re-anchor to entry's insertion point here.
             for (CandInj& ci : CandsForFn) {
                 if (ci.Persistent) {
-                    Value* Dst = gepI8(B, ci.CtTy, ci.GV);
-                    Value* Src = gepI8(B, ci.CtTy, ci.CtGV);
-                    B.CreateMemCpy(Dst, Align(1), Src, Align(1),
-                        ConstantInt::get(I64Ty, ci.CtBytes));
-                    Value* NoncePtr = gepI8(B, ci.NonceTy, ci.NonceGV);
-                    B.CreateCall(ChaChaDecryptFn, {
-                        Dst,
-                        ConstantInt::get(I32Ty, (uint32_t)ci.CtBytes),
-                        KeyPtr,
-                        NoncePtr,
-                        ConstantInt::get(I32Ty, 0)
-                        });
+                    Instruction* LazyInsertPt = FindLazyInsertPoint(ci.Uses);
+                    CallInst* LazyCall = LazyInsertPt
+                        ? IRBuilder<>(LazyInsertPt).CreateCall(ci.LazyFn, { KeyPtr })
+                        : B.CreateCall(ci.LazyFn, { KeyPtr });
+                    LazyCalls.push_back(LazyCall);
                     ++DecryptCallsInserted;
                     Changed = true;
                     continue;
@@ -1358,27 +1450,8 @@ namespace {
                 //     over the PHI's own block would be wrong);
                 //   - an EH-pad use (funclet/landingpad/catchswitch), where
                 //     ordinary dominance-based insertion is not meaningful.
-                bool NeedsFallback = Uses.empty();
-                for (Instruction* U : Uses) {
-                    if (isa<PHINode>(U) || isa<FuncletPadInst>(U) ||
-                        isa<LandingPadInst>(U) || isa<CatchSwitchInst>(U)) {
-                        NeedsFallback = true;
-                        break;
-                    }
-                }
-
-                BasicBlock* NCD = nullptr;
-                if (!NeedsFallback) {
-                    NCD = Uses[0]->getParent();
-                    for (Instruction* U : Uses) {
-                        if (!DT.getNode(NCD) || !DT.getNode(U->getParent())) {
-                            NeedsFallback = true;
-                            break;
-                        }
-                        NCD = DT.findNearestCommonDominator(NCD, U->getParent());
-                    }
-                    if (!NCD) NeedsFallback = true;
-                }
+                Instruction* LazyInsertPt = FindLazyInsertPoint(Uses);
+                bool NeedsFallback = LazyInsertPt == nullptr;
 
                 CallInst* DecCall = nullptr;
 
@@ -1405,13 +1478,7 @@ namespace {
                     // earliest use instruction physically in NCD, or (if no
                     // use lives in NCD itself, only in blocks it dominates)
                     // before NCD's terminator.
-                    Instruction* InsertPt = nullptr;
-                    for (Instruction& I : *NCD) {
-                        if (is_contained(Uses, &I)) { InsertPt = &I; break; }
-                    }
-                    if (!InsertPt) InsertPt = NCD->getTerminator();
-
-                    IRBuilder<> MB(InsertPt);
+                    IRBuilder<> MB(LazyInsertPt);
                     Value* Dst = gepI8(MB, ci.CtTy, Buf);
                     Value* Src = gepI8(MB, ci.CtTy, ci.CtGV);
                     MB.CreateMemCpy(Dst, Align(1), Src, Align(1),
@@ -1482,6 +1549,16 @@ namespace {
             InlineResult Res = InlineFunction(*DC, IFI);
             (void)Res;  // on the rare failure the call simply remains — still correct
         }
+
+        for (CallInst* LC : LazyCalls) {
+            InlineFunctionInfo IFI;
+            InlineResult Res = InlineFunction(*LC, IFI);
+            (void)Res;
+        }
+
+        for (Function* LazyFn : LazyFns)
+            if (LazyFn->use_empty())
+                LazyFn->eraseFromParent();
 
         // linkStub() pulls in the WHOLE aes stub, including the AES decrypt
         // chain (__aes_decrypt → __obf_aes_ctr_decrypt, plus extern

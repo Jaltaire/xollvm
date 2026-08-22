@@ -159,6 +159,12 @@ entry:
   ret void
 }
 
+define void @capture_message_again() {
+entry:
+  store ptr @escaped_message, ptr @escaped_pointer
+  ret void
+}
+
 define i32 @main() {
 entry:
   %value = load ptr, ptr @descriptor
@@ -167,6 +173,8 @@ entry:
   %address_value = inttoptr i64 %address to ptr
   %address_result = call i32 @puts(ptr %address_value)
   call void @capture_message()
+  call void @capture_message()
+  call void @capture_message_again()
   %escaped_value = load ptr, ptr @escaped_pointer
   %escaped_result = call i32 @puts(ptr %escaped_value)
   ret i32 0
@@ -509,7 +517,12 @@ entry:
         self.assertIn("external-marker", process.stdout)
         self.assertNotIn('section ".strenc', process.stdout)
         self.assertIn('section "__DATA,__strenc_', process.stdout)
-        self.assertIn("@llvm.global_ctors", process.stdout)
+        self.assertNotIn("@llvm.global_ctors", process.stdout)
+        self.assertNotIn("__strenc_runtime_init", process.stdout)
+        self.assertIn("cmpxchg ptr @.strenc.state.", process.stdout)
+        self.assertIn("acq_rel acquire", process.stdout)
+        self.assertIn("store atomic i32 2", process.stdout)
+        self.assertIn("load atomic i32", process.stdout)
 
     def run_runtime_policy(self, specification: str) -> bytes:
         environment = self.process_environment(
