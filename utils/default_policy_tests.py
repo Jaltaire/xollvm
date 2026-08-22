@@ -63,6 +63,14 @@ entry:
   ret i1 %result
 }
 
+define i8 @protected_compared_bool(i64 %value) {
+entry:
+  %condition = icmp ugt i64 %value, 7
+  %checked = icmp ule i1 %condition, true
+  %result = zext i1 %checked to i8
+  ret i8 %result
+}
+
 define void @protected_c_string() {
 entry:
   call void @consume(ptr @c_string, i64 8)
@@ -476,6 +484,21 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         body = self.function_body(process.stdout, "protected_truncated_bool")
         self.assertNotIn("trunc i8 %value to i1", body)
+        self.assertIn("__vm_", process.stdout)
+
+    def test_vm_virtualizes_boolean_comparisons(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "vm(preset=high)",
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_compared_bool$",
+                "XOLLVM_VERIFY_IR": "1",
+                "XOLLVM_IR_BUDGET_MULTIPLIER": "10000",
+                "XOLLVM_IR_BUDGET_MAX": "20000",
+            }
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        body = self.function_body(process.stdout, "protected_compared_bool")
+        self.assertNotIn("icmp ule i1 %condition, true", body)
         self.assertIn("__vm_", process.stdout)
 
     def test_vm_runtime_symbols_do_not_collide_between_modules(self) -> None:

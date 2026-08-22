@@ -82,7 +82,8 @@ uint32_t BytecodeEmitter::isize(Instruction* I) {
 		auto* CI = cast<ICmpInst>(I);
 		Type* T0 = CI->getOperand(0)->getType();
 		Type* T1 = CI->getOperand(1)->getType();
-		if (T0->isIntegerTy(32) && T1->isIntegerTy(32)) return 5;
+		if ((T0->isIntegerTy(1) && T1->isIntegerTy(1)) ||
+			(T0->isIntegerTy(32) && T1->isIntegerTy(32))) return 5;
 		if (T0->isIntegerTy(64) && T1->isIntegerTy(64)) return 5;
 		markUnsupported(I); return 0;
 	}
@@ -610,7 +611,8 @@ void BytecodeEmitter::emit(Instruction* I) {
 		Type* T0 = CI->getOperand(0)->getType();
 		Type* T1 = CI->getOperand(1)->getType();
 
-		if (T0->isIntegerTy(32) && T1->isIntegerTy(32)) {
+		if ((T0->isIntegerTy(1) && T1->isIntegerTy(1)) ||
+			(T0->isIntegerTy(32) && T1->isIntegerTy(32))) {
 			bop(OP_ICMP);
 			b8(xorSalt(newVR(I)));
 			b8(xorSalt(vr(CI->getOperand(0))));
