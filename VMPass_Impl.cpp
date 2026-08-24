@@ -186,7 +186,88 @@ bool VMImpl::run() {
 				continue;
 			}
 
+			if (IID == Intrinsic::fshl || IID == Intrinsic::fshr) {
+				Value* A = CI->getArgOperand(0);
+				Value* Bv = CI->getArgOperand(1);
+				Value* S = CI->getArgOperand(2);
+				auto* IT = dyn_cast<IntegerType>(A->getType());
+				if (!IT || IT->getBitWidth() > 64) continue;
+				unsigned W = IT->getBitWidth();
+				Value* Shift = W && (W & (W - 1)) == 0
+					? B.CreateAnd(S, ConstantInt::get(IT, W - 1), "funnel.shift")
+					: B.CreateURem(S, ConstantInt::get(IT, W), "funnel.shift");
+				Value* Inverse = B.CreateSub(ConstantInt::get(IT, 0), Shift, "funnel.inverse");
+				Inverse = W && (W & (W - 1)) == 0
+					? B.CreateAnd(Inverse, ConstantInt::get(IT, W - 1), "funnel.inverse.mask")
+					: B.CreateURem(Inverse, ConstantInt::get(IT, W), "funnel.inverse.mod");
+				Value* Left;
+				Value* Right;
+				if (IID == Intrinsic::fshl) {
+					Left = B.CreateShl(A, Shift, "funnel.left");
+					Right = B.CreateLShr(Bv, Inverse, "funnel.right");
+				} else {
+					Left = B.CreateLShr(A, Shift, "funnel.right");
+					Right = B.CreateShl(Bv, Inverse, "funnel.left");
+				}
+				Value* R = B.CreateOr(Left, Right, "funnel.result");
+				CI->replaceAllUsesWith(R);
+				CI->eraseFromParent();
+				continue;
+			}
+
 			// Anything else: leave in place, isize() will markUnsupported.
+		}
+	}
+
+	{
+		SmallVector<BinaryOperator*, 32> Operations;
+		for (BasicBlock& BB : F)
+			for (Instruction& I : BB)
+				if (auto* BO = dyn_cast<BinaryOperator>(&I)) {
+					auto* IT = dyn_cast<IntegerType>(BO->getType());
+					if (IT && IT->getBitWidth() < 32) Operations.push_back(BO);
+				}
+
+		for (BinaryOperator* BO : Operations) {
+			unsigned Op = BO->getOpcode();
+			if (Op != Instruction::Add && Op != Instruction::Sub &&
+				Op != Instruction::Mul && Op != Instruction::And &&
+				Op != Instruction::Or && Op != Instruction::Xor &&
+				Op != Instruction::Shl && Op != Instruction::LShr &&
+				Op != Instruction::AShr && Op != Instruction::SDiv &&
+				Op != Instruction::UDiv && Op != Instruction::SRem &&
+				Op != Instruction::URem) continue;
+			IRBuilder<> B(BO);
+			bool Signed = Op == Instruction::AShr || Op == Instruction::SDiv ||
+				Op == Instruction::SRem;
+			Value* L = Signed ? B.CreateSExt(BO->getOperand(0), I32Ty, "narrow.left")
+				: B.CreateZExt(BO->getOperand(0), I32Ty, "narrow.left");
+			Value* R = Signed ? B.CreateSExt(BO->getOperand(1), I32Ty, "narrow.right")
+				: B.CreateZExt(BO->getOperand(1), I32Ty, "narrow.right");
+			Value* Wide = B.CreateBinOp((Instruction::BinaryOps)Op, L, R, "narrow.wide");
+			Value* Narrow = B.CreateTrunc(Wide, BO->getType(), "narrow.result");
+			BO->replaceAllUsesWith(Narrow);
+			BO->eraseFromParent();
+		}
+
+		SmallVector<ICmpInst*, 32> Comparisons;
+		for (BasicBlock& BB : F)
+			for (Instruction& I : BB)
+				if (auto* CI = dyn_cast<ICmpInst>(&I)) {
+					auto* IT = dyn_cast<IntegerType>(CI->getOperand(0)->getType());
+					if (IT && IT->getBitWidth() < 32) Comparisons.push_back(CI);
+				}
+
+		for (ICmpInst* CI : Comparisons) {
+			IRBuilder<> B(CI);
+			bool Signed = ICmpInst::isSigned(CI->getPredicate());
+			Value* L = Signed ? B.CreateSExt(CI->getOperand(0), I32Ty, "narrow.compare.left")
+				: B.CreateZExt(CI->getOperand(0), I32Ty, "narrow.compare.left");
+			Value* R = Signed ? B.CreateSExt(CI->getOperand(1), I32Ty, "narrow.compare.right")
+				: B.CreateZExt(CI->getOperand(1), I32Ty, "narrow.compare.right");
+			Value* Wide = B.CreateICmp(CI->getPredicate(), L, R, "narrow.compare");
+			CI->replaceAllUsesWith(Wide);
+			CI->eraseFromParent();
 		}
 	}
 

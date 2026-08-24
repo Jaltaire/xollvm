@@ -364,6 +364,10 @@ def render_vm_v7_i64_ops_program(annotation: str) -> str:
     return programs.render("vm.i64_ops", annotation=annotation)
 
 
+def render_vm_v7_narrow_rotate_program(annotation: str) -> str:
+    return programs.render("vm.narrow_rotate", annotation=annotation)
+
+
 def render_strenc_basic(annotation: str) -> str:
     return programs.render("strenc.basic", annotation=annotation, secret=SECRET_A)
 

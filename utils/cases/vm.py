@@ -20,6 +20,7 @@ from ._common import (
     render_vm_v7_i64_ops_program,
     render_vm_v7_icmp_program,
     render_vm_v7_memory_program,
+    render_vm_v7_narrow_rotate_program,
     render_vm_v7_multi_fn_aes_program,
     render_vm_v7_multi_function_program,
     render_vm_v7_switch_dispatch_program,
@@ -203,6 +204,12 @@ def register(reg: Registry, **_opts) -> None:
             gates=VM_CORE_GATES + ["vm_enc_ctor"],
             category="vm",
             src_override=render_vm_v7_i64_ops_program(vm_v7))
+    reg.add(name="rt_vm_v7_narrow_rotate", passes=["vm"],
+            ann_override=vm_v7,
+            extra_opts=_DBG,
+            gates=VM_CORE_GATES + ["vm_enc_ctor"],
+            category="vm",
+            src_override=render_vm_v7_narrow_rotate_program(vm_v7))
 
     # ── Float register file tests (Step 01.3) ──
     reg.add(name="rt_vm_v7_float_basic", passes=["vm"],

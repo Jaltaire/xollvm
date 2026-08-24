@@ -256,16 +256,27 @@ void VMImpl::buildCalleeGlobal() {
 
 	// emit GVFTyIndices [C x i8] and populate shared FTy registry.
 	UniqueFTys.clear();
+	UniqueFixedArgCounts.clear();
 	auto* SS = VMEngine::getSharedState(M, EngineId);
 	SmallVector<uint8_t, 8> IdxBytes;
 	IdxBytes.reserve(E.CalleeFTyTab.size());
-	for (FunctionType* FTy : E.CalleeFTyTab) {
-		auto [It, Inserted] = SS->FTyToIdx.try_emplace(
-			FTy, (uint8_t)SS->SharedFTys.size());
-		if (Inserted) SS->SharedFTys.push_back(FTy);
-		IdxBytes.push_back(It->second);
+	for (unsigned I = 0; I < E.CalleeFTyTab.size(); ++I) {
+		FunctionType* FTy = E.CalleeFTyTab[I];
+		uint8_t FixedArgCount = E.CalleeFixedArgCounts[I];
+		unsigned TypeIndex = 0;
+		for (; TypeIndex < SS->SharedFTys.size(); ++TypeIndex)
+			if (SS->SharedFTys[TypeIndex] == FTy &&
+				SS->SharedFixedArgCounts[TypeIndex] == FixedArgCount)
+				break;
+		if (TypeIndex == SS->SharedFTys.size()) {
+			SS->SharedFTys.push_back(FTy);
+			SS->SharedFixedArgCounts.push_back(FixedArgCount);
+		}
+		IdxBytes.push_back((uint8_t)TypeIndex);
 	}
 	UniqueFTys.assign(SS->SharedFTys.begin(), SS->SharedFTys.end());
+	UniqueFixedArgCounts.assign(SS->SharedFixedArgCounts.begin(),
+		SS->SharedFixedArgCounts.end());
 	SmallVector<Constant*, 8> IdxConsts;
 	IdxConsts.reserve(IdxBytes.size());
 	for (uint8_t Idx : IdxBytes)

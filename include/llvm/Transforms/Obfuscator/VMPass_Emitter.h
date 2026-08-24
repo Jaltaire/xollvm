@@ -68,6 +68,7 @@ namespace llvm {
 		SmallVector<Value*, 8>           CalleeTab;  // callee table (CALL* targets)
 		// 6.2: parallel FunctionType table -- one entry per CalleeTab slot.
 		SmallVector<FunctionType*, 8>    CalleeFTyTab;
+		SmallVector<uint8_t, 8>          CalleeFixedArgCounts;
 
 		/// Metadata for an entry-block alloca created by PHI demotion.
 		struct PhiAllocaDesc {
@@ -402,12 +403,15 @@ namespace llvm {
 		}
 
 		// 6.2: callee registration with its FunctionType.
-		uint8_t callee(Value* C, FunctionType* FTy) {
+		uint8_t callee(Value* C, FunctionType* FTy, uint8_t FixedArgCount) {
 			// Vararg callees are never deduplicated: each call site has a
 			// unique concrete FTy (arg count may differ between call sites).
 			if (!FTy->isVarArg())
 				for (unsigned I = 0; I < CalleeTab.size(); ++I) if (CalleeTab[I] == C) return (uint8_t)I;
-			assert(CalleeTab.size() < 252); CalleeTab.push_back(C); CalleeFTyTab.push_back(FTy);
+			assert(CalleeTab.size() < 252);
+			CalleeTab.push_back(C);
+			CalleeFTyTab.push_back(FTy);
+			CalleeFixedArgCounts.push_back(FixedArgCount);
 			return (uint8_t)(CalleeTab.size() - 1);
 		}
 

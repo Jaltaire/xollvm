@@ -941,7 +941,8 @@ void BytecodeEmitter::emit(Instruction* I) {
 			ConcreteArgTys.push_back(CI->getArgOperand(A)->getType());
 		FunctionType* ConcreteFTy = FunctionType::get(
 			CI->getType(), ConcreteArgTys, CI->getFunctionType()->isVarArg());
-		uint8_t FI = callee(Fn, ConcreteFTy);
+		uint8_t FI = callee(Fn, ConcreteFTy,
+			(uint8_t)CI->getFunctionType()->getNumParams());
 		unsigned NAw = CI->arg_size();
 		if (NAw > 16) {
 			markUnsupported(I, "CALL arg count exceeds MaxArgs (16)");
@@ -1055,6 +1056,7 @@ bool BytecodeEmitter::run(Function& F, uint8_t S, const DataLayout& D) {
 	PR.clear();
 	CalleeTab.clear();
 	CalleeFTyTab.clear();
+	CalleeFixedArgCounts.clear();
 	PHIAllocas.clear();
 	ImmLoads.clear();
 	ImmLoads64.clear();

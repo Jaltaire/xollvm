@@ -13,11 +13,22 @@ uint32_t vadd(int n, ...) {{
     return sum;
 }}
 
+static __attribute__((noinline))
+uint32_t tagged_vadd(int tag, int n, ...) {{
+    va_list ap;
+    va_start(ap, n);
+    uint32_t sum = (uint32_t)tag;
+    for (int i = 0; i < n; i++) sum += (uint32_t)va_arg(ap, int);
+    va_end(ap);
+    return sum;
+}}
+
 __attribute__((noinline, annotate("{annotation}")))
 uint32_t obf_target(uint32_t x, uint32_t y) {{
     uint32_t a = vadd(3, (int)x, (int)y, (int)(x ^ y));
     uint32_t b = vadd(2, (int)(x + y), (int)(x * y & 0xFFFF));
-    return a ^ b ^ (x << 1) ^ (y >> 1);
+    uint32_t c = tagged_vadd(17, 2, (int)(x - y), (int)(x | y));
+    return a ^ b ^ c ^ (x << 1) ^ (y >> 1);
 }}
 
 int main(int argc, char** argv) {{

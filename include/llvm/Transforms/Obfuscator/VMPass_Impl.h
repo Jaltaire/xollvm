@@ -251,7 +251,7 @@ namespace llvm {
 			AllocaInst* EngineJunk = nullptr; // [NJunk x i32] private sink for decoy stores
 
 			SmallVector<FunctionType*, 16> SharedFTys;
-			DenseMap<FunctionType*, uint8_t> FTyToIdx;
+			SmallVector<uint8_t, 16> SharedFixedArgCounts;
 
 			struct CallSwitchInfo {
 				SwitchInst* SW = nullptr;
@@ -380,6 +380,7 @@ namespace llvm {
 		GlobalVariable* GVFTyIndices = nullptr;
 		// unique FunctionType* list built by buildCalleeGlobal(), consumed by buildCall2().
 		SmallVector<FunctionType*, 8> UniqueFTys;
+		SmallVector<uint8_t, 8> UniqueFixedArgCounts;
 		// AES-128-CTR key material 
 		// Generated once per virtualised function from the RNG hierarchy.
 		uint8_t AESKey[16] = {};          // raw 16-byte key

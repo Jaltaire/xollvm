@@ -1321,6 +1321,7 @@ void VMImpl::buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK
 	for (unsigned TIdx = 0; TIdx < NFTy; ++TIdx) {
 		FunctionType* SrcFTy = UniqueFTys[TIdx];
 		unsigned N = SrcFTy->getNumParams();
+		unsigned FixedN = UniqueFixedArgCounts[TIdx];
 		bool     isVA = SrcFTy->isVarArg();
 
 		auto* CaseBB = BasicBlock::Create(Ctx, "vm.cl.fty" + Twine(TIdx), HFn);
@@ -1349,7 +1350,8 @@ void VMImpl::buildCall2(VMOp Opc, const Twine& Name, llvm::VMEngine::RetKind2 RK
 		}
 
 
-		auto* CallFTy = FunctionType::get(RetTy, ATys, isVA);
+		auto* CallFTy = FunctionType::get(RetTy,
+			ArrayRef<Type*>(ATys).take_front(FixedN), isVA);
 		auto* CI = CB.CreateCall(CallFTy, Callee, CA, IsVoid ? "" : "vm.cl.rv");
 		if (!IsVoid && RetPHI) RetPHI->addIncoming(CI, CB.GetInsertBlock());
 		CB.CreateBr(MergeBB);

@@ -701,6 +701,7 @@ void VMImpl::ensureCallFTyCases() {
 		for (unsigned TIdx = OldCount; TIdx < NewCount; ++TIdx) {
 			FunctionType* SrcFTy = SS->SharedFTys[TIdx];
 			unsigned N = SrcFTy->getNumParams();
+			unsigned FixedN = SS->SharedFixedArgCounts[TIdx];
 			bool isVA = SrcFTy->isVarArg();
 
 			auto* CaseBB = BasicBlock::Create(Ctx,
@@ -728,7 +729,8 @@ void VMImpl::ensureCallFTyCases() {
 				}
 			}
 
-			auto* CallFTy = FunctionType::get(RetTy, ATys, isVA);
+			auto* CallFTy = FunctionType::get(RetTy,
+				ArrayRef<Type*>(ATys).take_front(FixedN), isVA);
 			auto* CI = CB.CreateCall(CallFTy, CSW.Callee, CA,
 				IsVoid ? "" : "vm.cl.rv");
 			if (!IsVoid && CSW.RetPHI)

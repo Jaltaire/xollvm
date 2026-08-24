@@ -1,0 +1,24 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+__attribute__((noinline, annotate("{annotation}")))
+uint64_t obf_target(uint64_t x, uint32_t y) {{
+    unsigned _BitInt(16) a = (unsigned _BitInt(16))x;
+    unsigned _BitInt(16) b = (unsigned _BitInt(16))y;
+    unsigned _BitInt(16) sum = a + b;
+    signed _BitInt(16) difference = (signed _BitInt(16))a - (signed _BitInt(16))b;
+    unsigned _BitInt(8) mask = (unsigned _BitInt(8))sum & (unsigned _BitInt(8))difference;
+    unsigned _BitInt(1) both = (unsigned _BitInt(1))(a != 0) & (unsigned _BitInt(1))(b != 0);
+    uint64_t left = __builtin_rotateleft64(x ^ (uint64_t)sum, 21);
+    uint64_t right = __builtin_rotateright64(left + (uint64_t)mask, y & 63u);
+    return right ^ (uint64_t)(uint16_t)difference ^ (uint64_t)both;
+}}
+
+int main(int argc, char** argv) {{
+    uint64_t x = argc > 1 ? strtoull(argv[1], 0, 0) : 0x123456789abcdef0ULL;
+    uint32_t y = argc > 2 ? (uint32_t)strtoul(argv[2], 0, 0) : 0x8a35u;
+    uint64_t result = obf_target(x, y);
+    printf("R=%llu\n", (unsigned long long)result);
+    return (int)(result & 0x7fu);
+}}
