@@ -181,6 +181,15 @@ entry:
 }
 """
 
+NO_ELIGIBLE_STRING_IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+define i32 @main() {
+entry:
+  ret i32 0
+}
+"""
+
 MULTI_MODULE_IR = """
 target triple = "arm64-apple-macosx14.0.0"
 
@@ -562,7 +571,14 @@ entry:
         self.assertNotIn("@llvm.global_ctors", process.stdout)
         self.assertLess(len(protected.splitlines()), 1000)
 
-    def run_runtime_policy(self, specification: str) -> bytes:
+    def run_runtime_policy(
+        self,
+        specification: str,
+        source_ir: str = RUNTIME_IR,
+        expected_stdout: str = (
+            "runtime-marker!\naddress-marker!\nescaped-marker!\n"
+        ),
+    ) -> bytes:
         environment = self.process_environment(
             {
                 "XOLLVM_DEFAULT_CONFIG": specification,
@@ -579,7 +595,7 @@ entry:
             bitcode = root / "runtime.bc"
             object_file = root / "runtime.o"
             executable = root / "runtime"
-            source.write_text(RUNTIME_IR)
+            source.write_text(source_ir)
             transformed = subprocess.run(
                 [
                     str(self.opt),
@@ -621,11 +637,17 @@ entry:
                 text=True,
             )
             self.assertEqual(executed.returncode, 0, executed.stderr)
-            self.assertEqual(
-                executed.stdout,
-                "runtime-marker!\naddress-marker!\nescaped-marker!\n",
-            )
+            self.assertEqual(executed.stdout, expected_stdout)
             return executable.read_bytes()
+
+    def test_string_encryption_without_candidates_links_cleanly(self) -> None:
+        executable = self.run_runtime_policy(
+            "strenc(minlen=4,cipher=chacha)",
+            source_ir=NO_ELIGIBLE_STRING_IR,
+            expected_stdout="",
+        )
+        self.assertNotIn(b"__aes_key_a", executable)
+        self.assertNotIn(b"__aes_key_b", executable)
 
     def test_indirect_string_encryption_preserves_runtime_behavior(self) -> None:
         executable = self.run_runtime_policy("strenc(minlen=4,cipher=chacha)")

@@ -1029,6 +1029,23 @@ namespace {
     // post-link patch tool, out of scope for an IR pass.
 
     bool StrEncImpl::encryptStringsChaCha(Module& M, StrEncCtx& Ctx) {
+        struct Candidate {
+            GlobalVariable* GV;
+            std::string     Plaintext;
+            unsigned        Index;
+        };
+        std::vector<Candidate> Cands;
+
+        unsigned idx = 0;
+        for (GlobalVariable& GV : M.globals()) {
+            if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
+            auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
+            if (!CDA || !CDA->isString()) continue;
+            Cands.push_back({ &GV, CDA->getAsString().str(), idx++ });
+        }
+
+        if (Cands.empty()) return false;
+
         // link the stub (brings in __strenc_chacha_decrypt alongside the rest)
         Function* LinkedDecFn = linkStub(M);
         if (!LinkedDecFn) {
@@ -1061,24 +1078,6 @@ namespace {
         // Phase 2 placement, and doesn't touch DT at all).
         auto& FAM =
             Ctx.MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-
-        // collect string candidates
-        struct Candidate {
-            GlobalVariable* GV;
-            std::string     Plaintext;
-            unsigned        Index;
-        };
-        std::vector<Candidate> Cands;
-
-        unsigned idx = 0;
-        for (GlobalVariable& GV : M.globals()) {
-            if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
-            auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
-            if (!CDA || !CDA->isString()) continue;
-            Cands.push_back({ &GV, CDA->getAsString().str(), idx++ });
-        }
-
-        if (Cands.empty()) return false;
 
         bool Changed = false;
 
