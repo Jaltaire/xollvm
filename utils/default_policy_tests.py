@@ -386,6 +386,45 @@ class DefaultPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(protected.count("store i64"), 2)
         self.assertIn("load i64", protected)
 
+    def test_runtime_injection_fails_closed_for_boolean_integer_results(self) -> None:
+        for function_name, width in [
+            ("protected_narrow_bool", 8),
+            ("protected_truncated_bool", 1),
+        ]:
+            with self.subTest(function_name=function_name):
+                process = self.run_opt(
+                    {
+                        "XOLLVM_DEFAULT_CONFIG": (
+                            "rasp(prob=100,minInstructions=1,maxExitSites=1,"
+                            "maxBlockSites=0,semanticReturns=1)"
+                        ),
+                        "XOLLVM_DEFAULT_INCLUDE": f"^{function_name}$",
+                        "XOLLVM_VERIFY_IR": "1",
+                    },
+                    ("--obf-seed=144",),
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                protected = self.function_body(process.stdout, function_name)
+                self.assertIn(f"icmp ne i64", protected)
+                self.assertRegex(protected, rf"and i{width} %result, %[^\n]+")
+                self.assertNotRegex(protected, rf"xor i{width} %result, %[^\n]+")
+
+    def test_runtime_injection_cascades_prior_site_failures_into_later_challenges(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": (
+                    "rasp(prob=100,minInstructions=1,maxExitSites=1,maxBlockSites=2)"
+                ),
+                "XOLLVM_DEFAULT_INCLUDE": "^protected_internal_cfg$",
+                "XOLLVM_VERIFY_IR": "1",
+            },
+            ("--obf-seed=146",),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        protected = self.function_body(process.stdout, "protected_internal_cfg")
+        self.assertGreaterEqual(protected.count("load i64"), 2)
+        self.assertGreaterEqual(protected.count("shl i64"), 3)
+
     def test_runtime_injection_excludes_the_runtime_abi_module(self) -> None:
         runtime_ir = IR + """
 define i64 @obscura_rasp_probe_0(i64 %site, i64 %challenge, i64 %caller) {

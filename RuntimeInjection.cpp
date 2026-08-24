@@ -48,12 +48,20 @@ namespace {
 		return builder.CreateXor(value, builder.CreateLShr(value, 31));
 	}
 
-	Value* semanticMask(IRBuilder<>& builder, Value* difference, Type* type) {
+	Value* semanticReturn(IRBuilder<>& builder, Value* returnValue,
+		Value* difference, uint64_t salt) {
+		Type* type = returnValue->getType();
 		Value* compromised = builder.CreateICmpNE(
 			difference, ConstantInt::get(difference->getType(), 0));
-		if (type->isIntegerTy(1))
-			return compromised;
-		return builder.CreateZExt(compromised, type);
+		Value* widened = type->isIntegerTy(1) ? compromised :
+			builder.CreateZExt(compromised, type);
+		Value* fullMask = builder.CreateSub(ConstantInt::get(type, 0), widened);
+		unsigned width = cast<IntegerType>(type)->getBitWidth();
+		if (width <= 8)
+			return builder.CreateAnd(returnValue, builder.CreateNot(fullMask));
+		Value* corruption = builder.CreateAnd(fullMask,
+			ConstantInt::get(type, mix64(salt) | UINT64_C(1)));
+		return builder.CreateXor(returnValue, corruption);
 	}
 }
 
@@ -124,21 +132,24 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 	auto emitSite = [&](IRBuilder<>& builder, uint64_t salt, unsigned ordinal) -> Value* {
 		uint64_t baseSite = mix64(passSeed ^ UINT64_C(0xa4093822299f31d0) ^ salt);
 		uint64_t baseChallenge = mix64(passSeed ^ UINT64_C(0x082efa98ec4e6c89) ^ salt);
+		Value* priorDifference = builder.CreateLoad(i64, accumulatedDifference);
 		Value* site = builder.CreateXor(
 			ConstantInt::get(i64, baseSite),
-			builder.CreateMul(entryDifference,
+			builder.CreateMul(builder.CreateOr(entryDifference, priorDifference),
 				ConstantInt::get(i64, std::max<uint64_t>(mix64(baseSite), 1))));
 		Value* challenge = builder.CreateXor(
 			ConstantInt::get(i64, baseChallenge),
 			builder.CreateOr(builder.CreateShl(entryObserved, 23),
 				builder.CreateLShr(entryObserved, 41)));
+		challenge = builder.CreateXor(challenge,
+			builder.CreateOr(builder.CreateShl(priorDifference, 37),
+				builder.CreateLShr(priorDifference, 27)));
 		Value* expected = emitExpectedResponse(builder, site, challenge);
 		Value* observed = builder.CreateCall(
 			probes[mix64(passSeed ^ salt ^ ordinal) & 7], {site, challenge, callerAddress});
 		builder.CreateCall(interlocks[mix64(passSeed ^ salt ^ ordinal) & 3], {
 			site, observed, expected});
 		Value* difference = builder.CreateXor(observed, expected);
-		Value* priorDifference = builder.CreateLoad(i64, accumulatedDifference);
 		builder.CreateStore(
 			builder.CreateOr(priorDifference, difference), accumulatedDifference);
 		return difference;
@@ -178,9 +189,9 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 		if (config.semanticReturns && returnValue && returnValue->getType()->isIntegerTy()) {
 			Value* accumulated = builder.CreateLoad(i64, accumulatedDifference);
 			returnInstruction->setOperand(
-				0, builder.CreateXor(returnValue,
-					semanticMask(builder, builder.CreateOr(accumulated, difference),
-						returnValue->getType())));
+				0, semanticReturn(builder, returnValue,
+					builder.CreateOr(accumulated, difference),
+					passSeed ^ UINT64_C(0x3f84d5b5b5470917) ^ index));
 		}
 	}
 
