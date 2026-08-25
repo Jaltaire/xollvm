@@ -710,6 +710,14 @@ entry:
         self.assertNotIn(b"address-marker", executable)
         self.assertNotIn(b"escaped-marker", executable)
 
+    def test_indirect_string_encryption_with_rasp_links_cleanly(self) -> None:
+        executable = self.run_runtime_policy(
+            "rasp(prob=12,minInstructions=12,maxExitSites=2,maxBlockSites=3),"
+            "strenc(minlen=4,cipher=chacha)"
+        )
+        self.assertNotIn(b"__aes_key_a", executable)
+        self.assertNotIn(b"__aes_key_b", executable)
+
     def test_absent_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({})
         self.assertEqual(process.returncode, 0, process.stderr)

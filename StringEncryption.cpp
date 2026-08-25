@@ -1060,6 +1060,12 @@ namespace {
             return false;
         }
 
+        for (const char* Name : { "__aes_decrypt", "__obf_aes_ctr_decrypt" }) {
+            if (Function* Dead = M.getFunction(Name))
+                if (Dead->use_empty())
+                    Dead->eraseFromParent();
+        }
+
         // Get a mutable reference to the annotation cache directly from the
         // MAM (see encryptStrings() for why we don't const_cast Ctx.Ann).
         auto& MutableCache =
@@ -1568,22 +1574,6 @@ namespace {
             } else {
                 LazyFn->addFnAttr(Attribute::NoInline);
             }
-
-        // linkStub() pulls in the WHOLE aes stub, including the AES decrypt
-        // chain (__aes_decrypt → __obf_aes_ctr_decrypt, plus extern
-        // __aes_key_a/__aes_key_b that only the AES path defines). The chacha
-        // path never calls that chain and never emits the key providers, so at
-        // -O0 (no globaldce) the dead __aes_decrypt keeps unresolved references
-        // to __aes_key_a/b and the final link fails. Erase the dead AES chain
-        // here. use_empty-guarded + ordered (drop __aes_decrypt first so
-        // __obf_aes_ctr_decrypt becomes dead too) so a module that also runs
-        // the AES strenc path, or the VM's own __obf_aes_ctr_decrypt ctor, is
-        // untouched (those keep a live use and are skipped).
-        for (const char* Name : { "__aes_decrypt", "__obf_aes_ctr_decrypt" }) {
-            if (Function* Dead = M.getFunction(Name))
-                if (Dead->use_empty())
-                    Dead->eraseFromParent();
-        }
 
         // ── Phase 3: cleanup — erase candidate globals now fully replaced ──
         for (GlobalVariable* GV : AllCandGVs)
