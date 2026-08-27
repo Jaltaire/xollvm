@@ -13,7 +13,7 @@
 namespace llvm::obf {
 
 	// Stable schema version for the JSON obfuscation map.
-	constexpr unsigned kObfReportSchemaVersion = 1;
+	constexpr unsigned kObfReportSchemaVersion = 2;
 
 	struct DifficultyComponents {
 		unsigned Insts = 0;
@@ -86,6 +86,7 @@ namespace llvm::obf {
 
 	struct ObfReportSink {
 		std::vector<FunctionReport> Functions;
+		bool ModuleTransformed = false;
 
 		void add(FunctionReport&& R);
 

@@ -568,6 +568,8 @@ namespace llvm {
 				MPM.addPass(llvm::obf::ObfVerifyModulePass("final"));
 
 			PreservedAnalyses PA = MPM.run(M, MAM);
+			if (!PA.areAllPreserved())
+				MAM.getResult<ObfReportAnalysis>(M).ModuleTransformed = true;
 
 			// Emit JSON report at end of module pipeline (if configured).
 			if (llvm::obf::isReportEnabled()) {

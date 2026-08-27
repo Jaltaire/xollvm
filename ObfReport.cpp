@@ -450,6 +450,7 @@ namespace llvm::obf {
 			Mod["target_triple"] = M.getTargetTriple().getTriple();
 		if (!M.getDataLayoutStr().empty())
 			Mod["data_layout"] = M.getDataLayoutStr();
+		Mod["transformed"] = Sink.ModuleTransformed;
 		Root["module"] = std::move(Mod);
 
 		json::Array Funcs;

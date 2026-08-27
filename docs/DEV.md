@@ -249,12 +249,13 @@ Root object:
 ```jsonc
 {
   "schema": "llvm_obfuscator.obf_map",
-  "schema_version": 1,
+  "schema_version": 2,
   "module": {
     "identifier": "string",
     "source_file": "string",      // optional
     "target_triple": "string",    // optional
-    "data_layout": "string"       // optional
+    "data_layout": "string",      // optional
+    "transformed": true
   },
   "functions": [ /* FunctionReport[] */ ]
 }
