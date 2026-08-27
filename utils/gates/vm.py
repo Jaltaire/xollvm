@@ -363,10 +363,31 @@ def vm_bindadeb_ctor_present(ir: str) -> Optional[str]:
     body = extract_fn_body(ir, m.group(1))
     if body is None:
         return "vm.adbind.ctor matched but function body extraction failed"
-    if "IsDebuggerPresent" not in body:
-        return "vm.adbind.ctor found but no IsDebuggerPresent call inside it"
+    if ("IsDebuggerPresent" not in body and
+            "vm.adbind.timing.reached" not in body):
+        return "vm.adbind.ctor found but no debugger-detection signal inside it"
+    if ("vm.adbind.timing.reached" in body and not re.search(
+            r"vm\.adbind\.timing\.reached = icmp uge i32 [^,]+, 3", body)):
+        return "vm.adbind.ctor timing detection is not debounced across three samples"
     if not re.search(r"vm\.adbind\.combine\b", body):
         return "vm.adbind.ctor found but no vm.adbind.combine (mask-XOR) block"
+    return None
+
+
+@register("vm_dispatch_antidebug_debounced")
+def vm_dispatch_antidebug_debounced(ir: str) -> Optional[str]:
+    required = (
+        "vm.ad.slow.ctr.old",
+        "vm.ad.slow.repeated",
+        "vm.ad.latched.old",
+        "vm.ad.corrupt.once",
+        "vm.ad.latched.new",
+    )
+    missing = [name for name in required if name not in ir]
+    if missing:
+        return f"dispatch anti-debug debounce is missing {', '.join(missing)}"
+    if not re.search(r"vm\.ad\.slow\.repeated = icmp uge i32 [^,]+, 3", ir):
+        return "dispatch anti-debug timing detection does not require three slow samples"
     return None
 
 

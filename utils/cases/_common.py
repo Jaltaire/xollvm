@@ -302,6 +302,7 @@ class TestCase:
     category:     str         = "pass"
     no_config_check: bool     = False
     src_override: Optional[str] = None
+    command_timeout: int      = 180
 
 
 class Registry:

@@ -235,11 +235,11 @@ void VMImpl::buildCalleeXorCtor() {
 // Inserts a counter-gated check between vm.dispatch and vm.fetch inside
 // the shared __vm_engine.  Every 64 fetch iterations the gate fires and:
 //   (a) reads the cycle counter twice with a small computation between,
-//       if delta > threshold → salt corruption (catches single-stepping)
+//       and requires three consecutive over-threshold deltas
 //   (b) on Windows, calls IsDebuggerPresent(), CheckRemoteDebuggerPresent(),
 //       and NtQueryInformationProcess(ProcessDebugPort) → salt corruption
 //
-// On detection: emitSaltCorruption() XORs the salt, making all subsequent
+// On detection: emitSaltCorruption() XORs the salt once, making all subsequent
 // bytecode decryptions produce garbage.  Execution continues — no crash.
 //
 // When no debugger is attached, the counter check is a single AND+CMP
@@ -274,6 +274,10 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 	IRBuilder<> EntB(SS->Entry->getTerminator());
 	AllocaInst* CtrA = EntB.CreateAlloca(I32Ty, nullptr, "vm.ad.ctr");
 	EntB.CreateStore(EntB.getInt32(0), CtrA)->setVolatile(true);
+	AllocaInst* SlowCtrA = EntB.CreateAlloca(I32Ty, nullptr, "vm.ad.slow.ctr");
+	EntB.CreateStore(EntB.getInt32(0), SlowCtrA)->setVolatile(true);
+	AllocaInst* LatchedA = EntB.CreateAlloca(I32Ty, nullptr, "vm.ad.latched");
+	EntB.CreateStore(EntB.getInt32(0), LatchedA)->setVolatile(true);
 
 	//  Create new basic blocks 
 	BasicBlock* CountBB = BasicBlock::Create(Ctx, "vm.ad.count", EF);
@@ -305,6 +309,7 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 	{
 		IRBuilder<> B(GateBB);
 		Value* Detected = ConstantInt::getFalse(Ctx);
+		Value* TimingSlow = ConstantInt::getFalse(Ctx);
 
 
 		// CI-only escape hatch (off by default: no kill-switch string shipped)
@@ -341,7 +346,7 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 			// threshold from config
 			auto* Slow = B.CreateICmpUGT(Delta,
 				B.getInt64((uint64_t)Cfg.adDispatchThreshold), "vm.ad.slow");
-			Detected = B.CreateOr(Detected, Slow, "vm.ad.det.time");
+			TimingSlow = Slow;
 		}
 
 		//  Windows: IsDebuggerPresent()
@@ -440,7 +445,27 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 			}
 		}
 
-		B.CreateCondBr(Detected, CorruptBB, FetchBB);
+		auto* OldSlowCtr = B.CreateLoad(I32Ty, SlowCtrA, "vm.ad.slow.ctr.old");
+		cast<LoadInst>(OldSlowCtr)->setVolatile(true);
+		Value* IncrementedSlowCtr = B.CreateAdd(
+			OldSlowCtr, B.getInt32(1), "vm.ad.slow.ctr.incremented");
+		Value* NewSlowCtr = B.CreateSelect(
+			TimingSlow, IncrementedSlowCtr, B.getInt32(0), "vm.ad.slow.ctr.new");
+		B.CreateStore(NewSlowCtr, SlowCtrA)->setVolatile(true);
+		Value* TimingDetected = B.CreateICmpUGE(
+			NewSlowCtr, B.getInt32(3), "vm.ad.slow.repeated");
+		Value* DetectionSignal = B.CreateOr(
+			Detected, TimingDetected, "vm.ad.detected");
+		auto* OldLatched = B.CreateLoad(I32Ty, LatchedA, "vm.ad.latched.old");
+		cast<LoadInst>(OldLatched)->setVolatile(true);
+		Value* NotLatched = B.CreateICmpEQ(
+			OldLatched, B.getInt32(0), "vm.ad.not.latched");
+		Value* DoCorrupt = B.CreateAnd(
+			DetectionSignal, NotLatched, "vm.ad.corrupt.once");
+		Value* NewLatched = B.CreateSelect(
+			DoCorrupt, B.getInt32(1), OldLatched, "vm.ad.latched.new");
+		B.CreateStore(NewLatched, LatchedA)->setVolatile(true);
+		B.CreateCondBr(DoCorrupt, CorruptBB, FetchBB);
 	}
 
 	//  vm.ad.corrupt: silently poison salt, then continue 
@@ -464,10 +489,10 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 // (@fn.vm.aes.rk / GVAESExpandedKey) instead of poisoning a salt value that
 // a patched detection call can simply avoid triggering.
 //
-// Detection mirrors the Windows checks in buildAntiDebugGate: IsDebuggerPresent,
-// CheckRemoteDebuggerPresent, and NtQueryInformationProcess(ProcessDebugPort)
-// resolved at runtime via GetProcAddress (no static ntdll import). The three
-// results OR together into a single 0/1 bit ("combined").
+// Detection requires three consecutive slow cycle-counter samples on x86-64
+// and AArch64. Windows additionally checks IsDebuggerPresent,
+// CheckRemoteDebuggerPresent, and NtQueryInformationProcess(ProcessDebugPort),
+// resolved at runtime via GetProcAddress. The results OR into a single bit.
 //
 // combined == 0 (no debugger): global untouched, AES ctor unmasks the correct
 // key, bytecode decodes correctly.
@@ -497,6 +522,29 @@ void VMImpl::buildAntiDebugKeyBindCtor() {
 	Value* HProc = nullptr;
 	Value* Proc = nullptr;
 	AllocaInst* Port = nullptr;
+
+	if (TI.IsX86_64 || TI.IsAArch64) {
+		Function* RCC = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::readcyclecounter);
+		Value* ConsecutiveSlow = B.getInt32(0);
+		for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
+			Value* T1 = B.CreateCall(RCC, {}, "vm.adbind.timing.start");
+			Value* SamplePtr = B.CreateGEP(
+				I8Ty, GVAESExpandedKey, B.getInt64(Attempt), "vm.adbind.timing.ptr");
+			auto* Sample = B.CreateLoad(I8Ty, SamplePtr, "vm.adbind.timing.sample");
+			Sample->setVolatile(true);
+			Value* T2 = B.CreateCall(RCC, {}, "vm.adbind.timing.end");
+			Value* Delta = B.CreateSub(T2, T1, "vm.adbind.timing.delta");
+			Value* Slow = B.CreateICmpUGT(
+				Delta, B.getInt64((uint64_t)Cfg.adHandlerThreshold),
+				"vm.adbind.timing.slow");
+			Value* Incremented = B.CreateAdd(
+				ConsecutiveSlow, B.getInt32(1), "vm.adbind.timing.incremented");
+			ConsecutiveSlow = B.CreateSelect(
+				Slow, Incremented, B.getInt32(0), "vm.adbind.timing.consecutive");
+		}
+		Detected = B.CreateICmpUGE(
+			ConsecutiveSlow, B.getInt32(3), "vm.adbind.timing.reached");
+	}
 
 	if (TI.IsWindows) {
 		// IsDebuggerPresent()

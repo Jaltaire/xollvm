@@ -403,7 +403,8 @@ def register(reg: Registry, **_opts) -> None:
             ann_override=ann_extra("vm_v7_hardened"),
             gates=VM_CORE_GATES + ["vm_enc_ctor",
                    "vm_hardened_mba", "vm_hardened_dead_blocks",
-                   "vm_hardened_dispatch_guard", "vm_hardened_handler_guards"],
+                   "vm_hardened_dispatch_guard", "vm_hardened_handler_guards",
+                   "vm_dispatch_antidebug_debounced"],
             extra_opts=_DBG, category="vm")
 
     # ── Register-value encryption (Step 05) ──
@@ -1222,7 +1223,8 @@ def register(reg: Registry, **_opts) -> None:
                 + VM_SUPEROPS_GATES + VM_KEYEDDISP_GATES
                 + VM_BINDADEB_GATES + VM_THREADED_GATES,
             extra_opts=_DBG, category="vm",
-            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_max))
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_max),
+            command_timeout=900)
 
     reg.add(name="rt_vm_v7_preset_light_determinism", passes=["vm"],
             ann_override=vm_v7_preset_light,

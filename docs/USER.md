@@ -733,7 +733,7 @@ Common knobs (see VM.md for the full list):
 | `hardened` | 0 | 0/1 | MBA expressions + opaque predicates on handler blocks; enables anti-debug traps. |
 | `regEncrypt` | 0 | 0/1 | XOR-encrypt virtual register values at rest in the register file. |
 | `antiDebug` | 1 | 0/1 | Anti-debug timing traps in the interpreter (effective only when `hardened=1`). |
-| `bindAntiDebug` | 0 | 0/1 | Fold debugger detection into the AES key — wrong key → garbage under a debugger. |
+| `bindAntiDebug` | 0 | 0/1 | Fold debounced timing and platform debugger detection into the AES key. |
 | `nestedVM` | 0 | 0/1 | Virtualise hot arithmetic handlers against a second interpreter (depth-2). |
 | `threadedDispatch` | 0 | 0/1 | Inline dispatch into every handler — no single central dispatch loop. |
 | `keyedDispatch` | 0 | 0/1 | Key each opcode byte by instruction pointer; defeats static byte→handler maps. |
@@ -742,7 +742,7 @@ Common knobs (see VM.md for the full list):
 | `enginePoolSize` | 1 | 1–∞ | Spread functions across N structurally-distinct engines. |
 | `perFnEngine` | 0 | 0/1 | Give this function its own dedicated engine. |
 | `metamorphicEngines` | 0 | 0/1 | Diversify each engine's handler bodies (needs a pool or `perFnEngine`). |
-| `adDispatchThreshold` | 5000 | — | RDTSC delta (cycles) for the dispatch-level timing gate. |
+| `adDispatchThreshold` | 5000 | — | Cycle-counter delta for the debounced dispatch-level timing gate. |
 | `adHandlerThreshold` | 5000 | — | RDTSC delta (cycles) for handler-level spot checks. |
 
 > The old `useAES` knob was removed — AES-128-CTR is now the only bytecode cipher.

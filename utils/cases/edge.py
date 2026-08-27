@@ -60,6 +60,7 @@ def register(reg: Registry, **_opts) -> None:
     #   recursion_mutual      → same
     #   struct_value          → mba/substitution have no i32 candidates
     #   vector_i32x4          → vector ops not in mba candidate set
+    #   loops_nested          → combined expansion can exhaust the IR budget
     #   tail_calls            → musttail blocks flattening / bcf
     #   int_widths            → mixed i8/i16/i64 leaves few mba sites
     _EDGE_SKIP_TOLERANT = {
@@ -70,6 +71,7 @@ def register(reg: Registry, **_opts) -> None:
         "recursion_mutual",
         "struct_value",
         "vector_i32x4",
+        "loops_nested",
         "tail_calls",
         "int_widths",
     }

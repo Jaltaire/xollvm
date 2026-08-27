@@ -35,6 +35,12 @@ def clang_for_lang(tools: Tools, is_cpp: bool) -> Path:
     if name.startswith("clang-"):
         cands.append(clang.with_name(name.replace("clang-", "clang++-", 1)))
     cands.append(clang.with_name(name.replace("clang", "clang++", 1)))
+    resolved = clang.resolve()
+    resolved_name = resolved.name
+    if resolved_name.startswith("clang-"):
+        cands.append(resolved.with_name(resolved_name.replace("clang-", "clang++-", 1)))
+        cands.append(resolved.with_name("clang++"))
+    cands.append(resolved.with_name(resolved_name.replace("clang", "clang++", 1)))
 
     for c in cands:
         if c.exists():
@@ -58,15 +64,22 @@ def compile_src_to_ll(tools: Tools, src: Path, out: Path, *, is_cpp: bool, v: bo
     ], verbose=v)
 
 
-def compile_ll_to_exe(tools: Tools, ll: Path, exe: Path, opt: str, *, is_cpp: bool, v: bool = False) -> None:
+def compile_ll_to_exe(
+    tools: Tools, ll: Path, exe: Path, opt: str, *, is_cpp: bool,
+    v: bool = False, timeout: int = 180,
+) -> None:
     compiler = clang_for_lang(tools, is_cpp)
     extra = ["-std=c++17"] if is_cpp else []
-    run_cmd([str(compiler), f"-{opt}", *extra, str(ll), "-o", str(exe)], verbose=v)
+    run_cmd(
+        [str(compiler), f"-{opt}", *extra, str(ll), "-o", str(exe)],
+        verbose=v,
+        timeout=timeout,
+    )
 
 
 def run_obfuscation(
     tools: Tools, base: Path, out: Path, seed: int,
-    extra: list[str] | None = None, v: bool = False,
+    extra: list[str] | None = None, v: bool = False, timeout: int = 180,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [
         str(tools.opt),
@@ -78,7 +91,7 @@ def run_obfuscation(
     ]
     if extra:
         cmd.extend(extra)
-    return run_cmd(cmd, verbose=v, capture=True)
+    return run_cmd(cmd, verbose=v, capture=True, timeout=timeout)
 
 
 def run_dump_config(
@@ -137,18 +150,24 @@ def parse_dump_config_for_fn(
     return enabled, ordered, params
 
 
-def run_o2(tools: Tools, src: Path, out: Path, v: bool = False) -> None:
-    run_cmd([str(tools.opt), "-passes=default<O2>", "-S", str(src), "-o", str(out)], verbose=v)
+def run_o2(
+    tools: Tools, src: Path, out: Path, v: bool = False, timeout: int = 180,
+) -> None:
+    run_cmd(
+        [str(tools.opt), "-passes=default<O2>", "-S", str(src), "-o", str(out)],
+        verbose=v,
+        timeout=timeout,
+    )
 
 
-def run_metrics(tools: Tools, ll: Path, func: str) -> dict:
+def run_metrics(tools: Tools, ll: Path, func: str, timeout: int = 180) -> dict:
     cp = run_cmd([
         str(tools.opt),
         "-disable-output",
         "-passes=obf-metrics",
         f"-obf-metrics-function={func}",
         str(ll),
-    ], capture=True)
+    ], capture=True, timeout=timeout)
     lines = [l.strip() for l in cp.stdout.splitlines() if l.strip()]
     if not lines:
         return {}

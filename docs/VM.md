@@ -597,11 +597,11 @@ itself:
 Active when both `hardened=1` and `antiDebug=1`.
 
 - **Dispatch-level gate** (`buildAntiDebugGate`): every `adDispatchInterval` fetch iterations
-  (default 64), the interpreter checks whether the RDTSC delta since the last check exceeds
-  `adDispatchThreshold` cycles (default 5000). If exceeded (suggesting a debugger step or
-  hardware breakpoint), `emitSaltCorruption` is called — the salt is XOR'd with a
-  `PoisonKey`, causing all subsequent register-index deobfuscation to produce wrong slots
-  and silently corrupt execution.
+  (default 64), the interpreter checks whether a cycle-counter sample exceeds
+  `adDispatchThreshold` cycles (default 5000). Three consecutive slow samples are required
+  before `emitSaltCorruption` XORs the salt with a `PoisonKey`; a latch prevents the
+  self-inverse XOR from later cancelling itself. Subsequent register-index deobfuscation
+  uses the wrong slots and silently corrupts execution.
 - **Handler spot-checks**: `adHandlerProb`% of handlers (default 10%) get an inline RDTSC
   check against `adHandlerThreshold` (default 5000 cycles). To avoid false positives from
   ordinary scheduling noise, a trap poisons the salt only after **`kDebounce` consecutive**
@@ -613,13 +613,13 @@ exception, which makes debugging under a debugger harder to detect and diagnose.
 
 **Anti-debug bound into the key schedule (`bindAntiDebug=1`, requires `hardened`).** Instead
 of (or in addition to) the timing traps, a per-function `.init_array` constructor at priority
-100 — running *before* the AES-decrypt ctor — reads `IsDebuggerPresent`,
-`CheckRemoteDebuggerPresent`, and `NtQueryInformationProcess(ProcessDebugPort)` and XORs a
-`bit × ADPoisonKey` mask into the first 16 bytes of the masked AES round-key global. Under a
-debugger the AES key that decrypts the bytecode is wrong, so the bytecode decodes to garbage
-and the program crashes before the interpreter runs a single opcode; under a normal run the
-mask is untouched. When `bindAntiDebug` is on, the handler-level RDTSC traps are skipped
-entirely (they were the historical source of timing flakes).
+100 — running *before* the AES-decrypt ctor — requires three consecutive slow cycle-counter
+samples on x86-64 and AArch64. Windows also reads `IsDebuggerPresent`,
+`CheckRemoteDebuggerPresent`, and `NtQueryInformationProcess(ProcessDebugPort)`. A detected
+debugger XORs a `bit × ADPoisonKey` mask into the first 16 bytes of the masked AES round-key
+global. The wrong AES key then decodes the bytecode to garbage before the interpreter runs a
+single opcode; under a normal run the mask is untouched. When `bindAntiDebug` is on, the
+handler-level timing traps are skipped entirely.
 
 ---
 

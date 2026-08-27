@@ -191,11 +191,6 @@ def run_test(
     tdir = work / tc.name
     tdir.mkdir(parents=True, exist_ok=True)
 
-    test_report_root: Optional[Path] = None
-    if report_enabled:
-        test_report_root = report_root / tc.name
-        test_report_root.mkdir(parents=True, exist_ok=True)
-
     # Effective skip-strictness:
     #   explicit per-test value wins; otherwise --strict-skips applies to
     #   multi-pass tests (>= 2 passes) only. Single-pass tests are
@@ -204,6 +199,14 @@ def run_test(
         eff_no_skips = bool(tc.expect_no_skips)
     else:
         eff_no_skips = bool(strict_skips and len(tc.passes) >= 2)
+
+    test_report_root: Optional[Path] = None
+    if report_enabled:
+        test_report_root = report_root / tc.name
+    elif eff_no_skips and tc.allowed_skip_reasons:
+        test_report_root = tdir / "skip_reports"
+    if test_report_root is not None:
+        test_report_root.mkdir(parents=True, exist_ok=True)
 
     def _report_opts(label: str) -> tuple[list[str], Optional[Path]]:
         base_opts = list(tc.extra_opts or [])
@@ -314,8 +317,14 @@ def run_test(
         try:
             extra_a, rdir_a = _report_opts(f"det_a_s{s1}")
             extra_b, rdir_b = _report_opts(f"det_b_s{s2}")
-            run_obfuscation(tools, base_ll, ll_a, s1, extra_a or None, v=verbose)
-            run_obfuscation(tools, base_ll, ll_b, s2, extra_b or None, v=verbose)
+            run_obfuscation(
+                tools, base_ll, ll_a, s1, extra_a or None, v=verbose,
+                timeout=tc.command_timeout,
+            )
+            run_obfuscation(
+                tools, base_ll, ll_b, s2, extra_b or None, v=verbose,
+                timeout=tc.command_timeout,
+            )
 
             if report_enabled and report_html and report_tool:
                 for label, rdir in ((f"det_a_s{s1}", rdir_a), (f"det_b_s{s2}", rdir_b)):
@@ -360,7 +369,10 @@ def run_test(
 
         try:
             extra_opts, rdir = _report_opts(f"seed_{seed}")
-            cp = run_obfuscation(tools, base_ll, obf_ll, seed, extra_opts or None, v=verbose)
+            cp = run_obfuscation(
+                tools, base_ll, obf_ll, seed, extra_opts or None, v=verbose,
+                timeout=tc.command_timeout,
+            )
         except Exception as e:
             res.status = "FAIL"
             res.reason = f"seed {seed}: opt: {e}"
@@ -412,7 +424,10 @@ def run_test(
             continue
 
         try:
-            compile_ll_to_exe(tools, obf_ll, obf_exe, "O0", is_cpp=is_cpp, v=verbose)
+            compile_ll_to_exe(
+                tools, obf_ll, obf_exe, "O0", is_cpp=is_cpp, v=verbose,
+                timeout=tc.command_timeout,
+            )
         except Exception as e:
             res.status = "FAIL"
             res.reason = f"seed {seed}: compile: {e}"
@@ -449,10 +464,13 @@ def run_test(
             b_o2_exe = tdir / exe_name("base_O2")
             o_o2_exe = tdir / exe_name(f"obf_s{seed}_O2")
             try:
-                run_o2(tools, base_ll, b_o2_ll, v=verbose)
-                run_o2(tools, obf_ll, o_o2_ll, v=verbose)
+                run_o2(tools, base_ll, b_o2_ll, v=verbose, timeout=tc.command_timeout)
+                run_o2(tools, obf_ll, o_o2_ll, v=verbose, timeout=tc.command_timeout)
                 compile_ll_to_exe(tools, b_o2_ll, b_o2_exe, "O0", is_cpp=is_cpp, v=verbose)
-                compile_ll_to_exe(tools, o_o2_ll, o_o2_exe, "O0", is_cpp=is_cpp, v=verbose)
+                compile_ll_to_exe(
+                    tools, o_o2_ll, o_o2_exe, "O0", is_cpp=is_cpp, v=verbose,
+                    timeout=tc.command_timeout,
+                )
             except Exception as e:
                 res.status = "FAIL"
                 res.reason = f"seed {seed}: O2: {e}"
@@ -473,8 +491,8 @@ def run_test(
 
         if not no_metrics:
             try:
-                bm = run_metrics(tools, base_ll, "obf_target")
-                om = run_metrics(tools, obf_ll, "obf_target")
+                bm = run_metrics(tools, base_ll, "obf_target", timeout=tc.command_timeout)
+                om = run_metrics(tools, obf_ll, "obf_target", timeout=tc.command_timeout)
                 mf = tdir / "metrics.jsonl"
                 with open(mf, "a", encoding="utf-8") as f:
                     f.write(json.dumps({

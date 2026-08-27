@@ -358,9 +358,9 @@
  *   metamorphicEngines (0)   diversify each engine's handler bodies
  *                            (needs a pool or perFnEngine)
  *   antiDebug        (1)     anti-debug traps (active only when hardened=1)
- *   bindAntiDebug    (0)     fold debugger detection into the AES key
+ *   bindAntiDebug    (0)     fold timing and platform debugger detection into the AES key
  *                            (needs hardened + antiDebug)
- *   adDispatchThreshold  (5000)  rdtsc cycle delta for the dispatch gate
+ *   adDispatchThreshold  (5000)  cycle delta for the debounced dispatch gate
  *   adHandlerThreshold   (5000)  rdtsc cycle delta for handler spot-checks (debounced)
  *   adDispatchInterval   (64)    check every N fetches (power of 2)
  *   adHandlerProb        [0-100] (10)  % of handlers that carry a trap

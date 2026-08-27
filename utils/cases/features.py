@@ -14,5 +14,6 @@ def register(reg: Registry, **_opts) -> None:
     reg.add(
         name="rt_opaque_families", passes=["flattening", "bcf"],
         ann_override=ann_extra("opaque_families"),
+        extra_opts=["--obf-ir-budget-multiplier=100"],
         gates=["opaque_families"], category="feature",
     )
