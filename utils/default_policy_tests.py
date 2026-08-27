@@ -190,6 +190,22 @@ entry:
 }
 """
 
+SENSITIVE_POLICY_RUNTIME_IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+@sensitive_message = private unnamed_addr constant [18 x i8] c"sensitive-marker!\\00"
+@ordinary_message = private unnamed_addr constant [17 x i8] c"ordinary-marker!\\00"
+
+declare i32 @puts(ptr)
+
+define i32 @main() {
+entry:
+  %sensitive_result = call i32 @puts(ptr @sensitive_message)
+  %ordinary_result = call i32 @puts(ptr @ordinary_message)
+  ret i32 0
+}
+"""
+
 MULTI_MODULE_IR = """
 target triple = "arm64-apple-macosx14.0.0"
 
@@ -265,6 +281,7 @@ POLICY_ENVIRONMENT = {
     "XOLLVM_RANDOMIZE_ADEC_CONSTANTS",
     "XOLLVM_ADEC_PREFIX",
     "XOLLVM_REPORT_JSON",
+    "XOLLVM_SENSITIVE_STRINGS_FILE",
 }
 
 
@@ -313,6 +330,23 @@ class DefaultPolicyTests(unittest.TestCase):
             if process.returncode == 0:
                 process.stdout = output.read_text()
             return process
+
+    def run_sensitive_policy(
+        self,
+        policy_text: str,
+        specification: str = "constenc(prob=0)",
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "sensitive.json"
+            policy.write_text(policy_text)
+            return self.run_opt(
+                {
+                    "XOLLVM_DEFAULT_CONFIG": specification,
+                    "XOLLVM_DEFAULT_INCLUDE": "^main$",
+                    "XOLLVM_SENSITIVE_STRINGS_FILE": str(policy),
+                },
+                source_ir=SENSITIVE_POLICY_RUNTIME_IR,
+            )
 
     def test_runtime_injection_interlocks_without_corrupting_abi_results(self) -> None:
         process = self.run_opt(
@@ -591,6 +625,76 @@ entry:
         self.assertIn("load atomic i32", process.stdout)
         self.assertNotIn("define private void @__strenc_lazy_", process.stdout)
 
+    def test_sensitive_policy_encrypts_only_matching_strings(self) -> None:
+        process = self.run_sensitive_policy(
+            json.dumps(["", "sensitive-marker!"])
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotIn("sensitive-marker!", process.stdout)
+        self.assertIn("ordinary-marker!", process.stdout)
+
+    def test_explicit_string_encryption_overrides_sensitive_only_selection(self) -> None:
+        process = self.run_sensitive_policy(
+            json.dumps(["sensitive-marker!"]),
+            specification="strenc(minlen=1,cipher=chacha)",
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotIn("sensitive-marker!", process.stdout)
+        self.assertNotIn("ordinary-marker!", process.stdout)
+
+    def test_explicit_string_encryption_ignores_invalid_sensitive_policy(self) -> None:
+        process = self.run_sensitive_policy(
+            "[",
+            specification="strenc(minlen=1,cipher=chacha)",
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotIn("sensitive-marker!", process.stdout)
+        self.assertNotIn("ordinary-marker!", process.stdout)
+
+    def test_empty_sensitive_policy_leaves_strings_unchanged(self) -> None:
+        process = self.run_sensitive_policy(json.dumps([""]))
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("sensitive-marker!", process.stdout)
+        self.assertIn("ordinary-marker!", process.stdout)
+
+    def test_unmatched_sensitive_policy_leaves_strings_unchanged(self) -> None:
+        process = self.run_sensitive_policy(json.dumps(["absent-marker!"]))
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("sensitive-marker!", process.stdout)
+        self.assertIn("ordinary-marker!", process.stdout)
+
+    def test_unreadable_sensitive_policy_is_rejected(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "constenc(prob=0)",
+                "XOLLVM_DEFAULT_INCLUDE": "^main$",
+                "XOLLVM_SENSITIVE_STRINGS_FILE": "/missing/sensitive-policy.json",
+            },
+            source_ir=SENSITIVE_POLICY_RUNTIME_IR,
+        )
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("The sensitive-string policy could not be read.", process.stderr)
+
+    def test_invalid_sensitive_policy_json_is_rejected(self) -> None:
+        process = self.run_sensitive_policy("[")
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("The sensitive-string policy is not valid JSON.", process.stderr)
+
+    def test_non_array_sensitive_policy_is_rejected(self) -> None:
+        process = self.run_sensitive_policy(
+            json.dumps({"value": "sensitive-marker!"})
+        )
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("The sensitive-string policy must be a JSON array.", process.stderr)
+
+    def test_non_string_sensitive_policy_value_is_rejected(self) -> None:
+        process = self.run_sensitive_policy(json.dumps(["sensitive-marker!", 7]))
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn(
+            "Every sensitive-string policy value must be a string.",
+            process.stderr,
+        )
+
     def test_many_escaping_strings_retain_private_materializers(self) -> None:
         process = self.run_opt(
             {
@@ -612,22 +716,25 @@ entry:
 
     def run_runtime_policy(
         self,
-        specification: str,
+        specification: str | None,
         source_ir: str = RUNTIME_IR,
         expected_stdout: str = (
             "runtime-marker!\naddress-marker!\nescaped-marker!\n"
         ),
+        extra_environment: dict[str, str] | None = None,
     ) -> bytes:
-        environment = self.process_environment(
-            {
-                "XOLLVM_DEFAULT_CONFIG": specification,
-                "XOLLVM_DEFAULT_INCLUDE": "^main$",
-                "XOLLVM_VERIFY_IR": "1",
-                "XOLLVM_IR_BUDGET_MULTIPLIER": "100",
-                "XOLLVM_IR_BUDGET_MAX": "20000",
-                "XOLLVM_MAX_FUNCTION_INSTRUCTIONS": "20000",
-            }
-        )
+        policy_environment = {
+            "XOLLVM_DEFAULT_INCLUDE": "^main$",
+            "XOLLVM_VERIFY_IR": "1",
+            "XOLLVM_IR_BUDGET_MULTIPLIER": "100",
+            "XOLLVM_IR_BUDGET_MAX": "20000",
+            "XOLLVM_MAX_FUNCTION_INSTRUCTIONS": "20000",
+        }
+        if specification is not None:
+            policy_environment["XOLLVM_DEFAULT_CONFIG"] = specification
+        if extra_environment is not None:
+            policy_environment.update(extra_environment)
+        environment = self.process_environment(policy_environment)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "runtime.ll"
@@ -678,6 +785,19 @@ entry:
             self.assertEqual(executed.returncode, 0, executed.stderr)
             self.assertEqual(executed.stdout, expected_stdout)
             return executable.read_bytes()
+
+    def test_sensitive_policy_preserves_runtime_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "sensitive.json"
+            policy.write_text(json.dumps(["sensitive-marker!"]))
+            executable = self.run_runtime_policy(
+                "constenc(prob=0)",
+                source_ir=SENSITIVE_POLICY_RUNTIME_IR,
+                expected_stdout="sensitive-marker!\nordinary-marker!\n",
+                extra_environment={"XOLLVM_SENSITIVE_STRINGS_FILE": str(policy)},
+            )
+        self.assertNotIn(b"sensitive-marker!", executable)
+        self.assertIn(b"ordinary-marker!", executable)
 
     def test_string_encryption_without_candidates_links_cleanly(self) -> None:
         executable = self.run_runtime_policy(

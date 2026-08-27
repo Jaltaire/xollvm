@@ -26,6 +26,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -35,6 +37,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
@@ -69,6 +72,47 @@ void llvm::obf::internalizeStubFunctions(Module& M) {
 }
 
 namespace {
+    std::vector<std::string> loadSensitiveStrings() {
+        const char* Path = std::getenv("XOLLVM_SENSITIVE_STRINGS_FILE");
+        if (!Path || !*Path)
+            return {};
+        auto Buffer = MemoryBuffer::getFile(Path);
+        if (!Buffer)
+            report_fatal_error("The sensitive-string policy could not be read.", false);
+        auto Parsed = json::parse((*Buffer)->getBuffer());
+        if (!Parsed)
+            report_fatal_error("The sensitive-string policy is not valid JSON.", false);
+        auto* Values = Parsed->getAsArray();
+        if (!Values)
+            report_fatal_error("The sensitive-string policy must be a JSON array.", false);
+
+        std::vector<std::string> Sensitive;
+        for (const json::Value& Value : *Values) {
+            auto String = Value.getAsString();
+            if (!String)
+                report_fatal_error("Every sensitive-string policy value must be a string.", false);
+            if (!String->empty())
+                Sensitive.push_back(String->str());
+        }
+        return Sensitive;
+    }
+
+    bool moduleContainsSensitiveString(
+        Module& M,
+        ArrayRef<std::string> Sensitive) {
+        for (GlobalVariable& GV : M.globals()) {
+            auto* Data = dyn_cast_or_null<ConstantDataArray>(GV.getInitializer());
+            if (!Data || !Data->isString())
+                continue;
+            StringRef Plaintext = Data->getAsString();
+            if (llvm::any_of(Sensitive, [&](const std::string& Value) {
+                    return Plaintext.contains(Value);
+                }))
+                return true;
+        }
+        return false;
+    }
+
     std::string strencSection(const Module& M, StringRef kind, bool text) {
         Triple target(M.getTargetTriple());
         if (target.isOSBinFormatMachO())
@@ -321,6 +365,8 @@ namespace {
     struct StrEncCtx : llvm::obf::ModPassCtx {
         StringEncryptionConfig Cfg;
         llvm::obf::Rng         KeyRng;
+        bool                    SensitiveOnly = false;
+        std::vector<std::string> SensitiveStrings;
 
         // AES-128 compile-time key material
         uint8_t MasterKey[16] = {};
@@ -386,6 +432,18 @@ namespace {
                 break;  // module-wide: first occurrence wins
             }
 
+            if (!Any) {
+                std::vector<std::string> Sensitive = loadSensitiveStrings();
+                if (moduleContainsSensitiveString(M, Sensitive)) {
+                    Any = true;
+                    Acc.enable = true;
+                    Acc.minLength = 1;
+                    Acc.useChaCha = true;
+                    SensitiveOnly = true;
+                    SensitiveStrings = std::move(Sensitive);
+                }
+            }
+
             Cfg = Acc;
             if (!Any) { Cfg.enable = false; return; }
 
@@ -417,6 +475,14 @@ namespace {
                 MasterKey[4 * i + 3] = (W >> 24) & 0xFF;
             }
             aes_key_expand(MasterKey, ExpandedKeys);
+        }
+
+        bool allowsPlaintext(StringRef Plaintext) const {
+            return !SensitiveOnly || llvm::any_of(
+                SensitiveStrings,
+                [&](const std::string& Value) {
+                    return Plaintext.contains(Value);
+                });
         }
     };
 
@@ -913,6 +979,7 @@ namespace {
             if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
             auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
             if (!CDA || !CDA->isString()) continue;
+            if (!Ctx.allowsPlaintext(CDA->getAsString())) continue;
             Cands.push_back({ &GV, CDA->getAsString().str(), idx++ });
         }
 
@@ -1041,6 +1108,7 @@ namespace {
             if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
             auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
             if (!CDA || !CDA->isString()) continue;
+            if (!Ctx.allowsPlaintext(CDA->getAsString())) continue;
             Cands.push_back({ &GV, CDA->getAsString().str(), idx++ });
         }
 
@@ -1675,6 +1743,7 @@ namespace {
             if (!shouldEncrypt(GV, Ctx.Cfg.minLength)) continue;
             auto* CDA = dyn_cast<ConstantDataArray>(GV.getInitializer());
             if (!CDA || !CDA->isString()) continue;
+            if (!Ctx.allowsPlaintext(CDA->getAsString())) continue;
             uint8_t K = (uint8_t)(Ctx.KeyRng.u32() & 0xFF);
             if (!K) K = 42;
             ToEnc.emplace_back(&GV, K, CDA->getAsString().str());
