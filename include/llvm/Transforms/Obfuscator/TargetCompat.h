@@ -20,6 +20,8 @@
 
 namespace llvm::obf {
 
+	void retargetEmbeddedRuntime(Module& Runtime, const Module& Destination);
+
 	// ============================================================================
 	// Target classification
 	// ============================================================================

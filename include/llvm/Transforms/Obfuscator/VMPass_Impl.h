@@ -941,6 +941,7 @@ namespace llvm {
 		bool opcodeNests(VMOp Op) const;
 
 		void buildHandlerTable();   // must come AFTER buildOpcodeHandlers
+		void emitHandlerDispatch(IRBuilder<>& B, Value* Handler);
 		void buildDispatch();       // must come AFTER buildHandlerTable
 
 		// threadedDispatch: emits the fetch/decode/indirectbr sequence inline

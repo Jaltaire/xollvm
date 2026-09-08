@@ -97,7 +97,9 @@ void VMImpl::buildHandlerTable() {
 			BasicBlock* HB = SharedEngineMode ? SS->OpcBB[L][VB]
 											   : OpcBB[L][VB];
 			assert(HB && "missing opcode handler variant");
-			Es[PermP * K + v] = BlockAddress::get(BAFn, HB);
+			Es[PermP * K + v] = TI.SupportsBlockAddress
+				? static_cast<Constant*>(BlockAddress::get(BAFn, HB))
+				: ConstantExpr::getIntToPtr(ConstantInt::get(I32Ty, L * K + VB), PtrTy);
 		}
 	}
 	for (unsigned i = 0; i < OP_COUNT * K; ++i)
@@ -133,7 +135,9 @@ void VMImpl::buildHandlerTable() {
 		BasicBlock* const* DBB = SharedEngineMode ? SS->DecoyBB.data() : DecoyBB.data();
 		for (unsigned i = 0; i < Nd; ++i) {
 			assert(DBB[i] && "missing decoy handler block");
-			Es[DecoyBase + i] = BlockAddress::get(BAFn, DBB[i]);
+			Es[DecoyBase + i] = TI.SupportsBlockAddress
+				? static_cast<Constant*>(BlockAddress::get(BAFn, DBB[i]))
+				: ConstantExpr::getIntToPtr(ConstantInt::get(I32Ty, OP_COUNT * K + i), PtrTy);
 		}
 	}
 
@@ -149,6 +153,22 @@ void VMImpl::buildHandlerTable() {
 
 // buildDispatch 
 // vm.dispatch: bounds-check IP  vm.fetch: fetch opcode  decrypt  indirectbr
+
+void VMImpl::emitHandlerDispatch(IRBuilder<>& B, Value* Handler) {
+	if (!TI.SupportsIndirectBr) {
+		auto* Selection = B.CreateSwitch(B.CreatePtrToInt(Handler, I32Ty), ExitBB,
+			OP_COUNT * NumVariants);
+		for (unsigned i = 0; i < OP_COUNT; ++i)
+			for (unsigned v = 0; v < NumVariants; ++v)
+				Selection->addCase(B.getInt32(i * NumVariants + v), OpcBB[i][v]);
+		return;
+	}
+	auto* Branch = B.CreateIndirectBr(Handler, OP_COUNT * NumVariants + 1);
+	for (unsigned i = 0; i < OP_COUNT; ++i)
+		for (unsigned v = 0; v < NumVariants; ++v)
+			Branch->addDestination(OpcBB[i][v]);
+	Branch->addDestination(ExitBB);
+}
 
 void VMImpl::buildDispatch() {
 	if (ThreadedDispatch) {
@@ -262,11 +282,7 @@ void VMImpl::buildDispatch() {
 		Value* Hndl = B.CreateLoad(PtrTy, Slot, "vm.hndl");
 
 		// indirectbr with all opcode blocks (all variants) declared as successors
-		IndirectBrInst* IBR = B.CreateIndirectBr(Hndl, OP_COUNT * NumVariants + 1);
-		for (unsigned i = 0; i < OP_COUNT; ++i)
-			for (unsigned v = 0; v < NumVariants; ++v)
-				IBR->addDestination(OpcBB[i][v]);
-		IBR->addDestination(ExitBB);
+		emitHandlerDispatch(B, Hndl);
 	}
 
 	// Terminate vm.entry with branch to vm.dispatch
@@ -361,11 +377,7 @@ void VMImpl::emitThreadedTail(IRBuilder<>& B) {
 	Value* Hndl = FB.CreateLoad(PtrTy, Slot, "vm.hndl");
 
 	// indirectbr with all opcode blocks (all variants) declared as successors
-	IndirectBrInst* IBR = FB.CreateIndirectBr(Hndl, OP_COUNT * NumVariants + 1);
-	for (unsigned i = 0; i < OP_COUNT; ++i)
-		for (unsigned v = 0; v < NumVariants; ++v)
-			IBR->addDestination(OpcBB[i][v]);
-	IBR->addDestination(ExitBB);
+	emitHandlerDispatch(FB, Hndl);
 }
 
 

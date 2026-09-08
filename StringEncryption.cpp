@@ -6,6 +6,7 @@
 #include "llvm/Transforms/Obfuscator/MBAUtils.h"
 #include "llvm/Transforms/Obfuscator/PassCtx.h"
 #include "llvm/Transforms/Obfuscator/Utils.h"
+#include "llvm/Transforms/Obfuscator/TargetCompat.h"
 
 #include "llvm/Transforms/Obfuscator/AESStubBitcode.h"
 
@@ -114,6 +115,8 @@ namespace {
     }
 
     std::string strencSection(const Module& M, StringRef kind, bool text) {
+        if (Triple(M.getTargetTriple()).isWasm())
+            return {};
         Triple target(M.getTargetTriple());
         if (target.isOSBinFormatMachO())
             return (Twine(text ? "__TEXT,__strenc_" : "__DATA,__strenc_") + kind).str();
@@ -615,19 +618,10 @@ namespace {
 
         std::unique_ptr<Module> StubM = std::move(*StubOrErr);
 
-        // Set the data layout and target triple to match the target module so the
-        // linker doesn't complain about mismatches.
-        StubM->setDataLayout(M.getDataLayout());
-        StubM->setTargetTriple(M.getTargetTriple());
-
-        // aes_stub.c is fixed-width (uint8_t/uint32_t) only, so the DL/triple
-        // override above is fully safe -- but leftover module-flag metadata
-        // baked in from whatever host triple built the embedded bitcode (e.g.
-        // wchar_size) can still conflict with M's own flags and make
-        // linkModules() fail on cross-target builds. Drop it; the stub needs
-        // none of its own.
-        if (auto *MDFlags = StubM->getModuleFlagsMetadata())
-            MDFlags->eraseFromParent();
+        // The fixed-width AES runtime can adopt the destination layout and
+        // triple. Host module flags and CPU attributes must not survive this
+        // change, and Wasm cannot depend on native stack-protector symbols.
+        llvm::obf::retargetEmbeddedRuntime(*StubM, M);
 
         // Link — we only need definitions that are referenced.
         // Linker::Flags::LinkOnlyNeeded avoids pulling in unreferenced symbols.

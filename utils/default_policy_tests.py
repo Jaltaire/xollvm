@@ -289,6 +289,32 @@ class DefaultPolicyTests(unittest.TestCase):
     opt: Path
     plugin: Path
 
+    def test_embedded_runtimes_do_not_retain_the_build_hosts_cpu_attributes(self) -> None:
+        for target in ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]:
+            for specification in [
+                "strenc(minlen=4,cipher=aes)",
+                "vm(minBlocks=1,encBytecode=1,hardened=1,antiDebug=0,nestedVM=0)",
+            ]:
+                with self.subTest(target=target, specification=specification):
+                    process = self.run_opt(
+                        {
+                            "XOLLVM_DEFAULT_CONFIG": specification,
+                            "XOLLVM_DEFAULT_INCLUDE": "^protected_",
+                            "XOLLVM_IR_BUDGET_MAX": "100000",
+                            "XOLLVM_IR_BUDGET_MULTIPLIER": "1000",
+                        },
+                        source_ir=IR.replace("arm64-apple-macosx14.0.0", target),
+                    )
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    self.assertNotIn('"target-cpu"', process.stdout)
+                    self.assertNotIn('"target-features"', process.stdout)
+                    self.assertNotIn('"tune-cpu"', process.stdout)
+                    if target.startswith("wasm"):
+                        self.assertNotRegex(process.stdout, r"\bssp(?:req|strong)?\b")
+                        self.assertNotIn('section ".strenc.', process.stdout)
+                        self.assertNotIn("blockaddress(", process.stdout)
+                        self.assertNotIn("indirectbr ", process.stdout)
+
     @staticmethod
     def process_environment(environment: dict[str, str]) -> dict[str, str]:
         process_environment = {

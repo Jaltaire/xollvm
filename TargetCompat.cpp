@@ -8,6 +8,25 @@ using namespace llvm;
 
 namespace llvm::obf {
 
+	void retargetEmbeddedRuntime(Module& Runtime, const Module& Destination) {
+		Runtime.setDataLayout(Destination.getDataLayout());
+		Runtime.setTargetTriple(Destination.getTargetTriple());
+		if (auto* Flags = Runtime.getModuleFlagsMetadata())
+			Flags->eraseFromParent();
+		const bool IsWasm = Triple(Destination.getTargetTriple()).isWasm();
+		for (Function& F : Runtime) {
+			for (StringRef Name : {"target-cpu", "target-features", "tune-cpu"})
+				F.removeFnAttr(Name);
+			if (IsWasm) {
+				F.removeFnAttr(Attribute::StackProtect);
+				F.removeFnAttr(Attribute::StackProtectReq);
+				F.removeFnAttr(Attribute::StackProtectStrong);
+				F.removeFnAttr("stack-protector-buffer-size");
+				F.removeFnAttr("probe-stack");
+			}
+		}
+	}
+
 	// ============================================================================
 	// TargetInfo construction
 	// ============================================================================
