@@ -3,6 +3,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
 #include <string>
@@ -13,7 +14,80 @@
 namespace llvm::obf {
 
 	// Stable schema version for the JSON obfuscation map.
-	constexpr unsigned kObfReportSchemaVersion = 2;
+	constexpr unsigned kObfReportSchemaVersion = 3;
+
+	enum class IrCensusStatus { Measured, Unmeasured };
+	enum class IrCensusReason {
+		ModuleInputNotCaptured,
+		OriginalSiteAttributionUnavailable,
+		StringSelectionNotReported
+	};
+	enum class IrObjectKind {
+		Definition, Declaration, Instruction, GlobalVariable, Alias, IFunc
+	};
+	enum class IrFunctionOrigin {
+		InputDefinitionObject, InputDeclarationObject, CreatedOrRecreatedObject
+	};
+	enum class IrInputDisposition { PresentInOutputModule, NotPresentInOutputModule };
+
+	struct IrObjectCounts {
+		uint64_t Definitions = 0;
+		uint64_t Declarations = 0;
+		uint64_t Instructions = 0;
+		uint64_t GlobalVariables = 0;
+		uint64_t Aliases = 0;
+		uint64_t IFuncs = 0;
+
+		void add(IrObjectKind Kind);
+	};
+
+	struct IrInputFunction {
+		uint64_t Id = 0;
+		std::string Name;
+		bool Declaration = false;
+		uint64_t Instructions = 0;
+		IrInputDisposition Disposition = IrInputDisposition::NotPresentInOutputModule;
+	};
+
+	struct IrOutputFunction {
+		std::string Name;
+		bool Declaration = false;
+		IrFunctionOrigin Origin = IrFunctionOrigin::CreatedOrRecreatedObject;
+		uint64_t InputId = 0;
+		uint64_t Instructions = 0;
+		uint64_t InputInstructionObjects = 0;
+		uint64_t CreatedOrRecreatedInstructionObjects = 0;
+	};
+
+	struct ModuleIrCensusReport {
+		IrCensusStatus Status = IrCensusStatus::Unmeasured;
+		IrObjectCounts Input;
+		IrObjectCounts Output;
+		IrObjectCounts InputObjectsNotPresentInOutput;
+		IrObjectCounts OutputInputObjects;
+		IrObjectCounts OutputCreatedOrRecreatedObjects;
+		std::vector<IrInputFunction> InputFunctions;
+		std::vector<IrOutputFunction> OutputFunctions;
+	};
+
+	class ModuleIrCensus {
+		struct InputObject {
+			WeakVH Object;
+			IrObjectKind Kind;
+		};
+		struct InputFunction {
+			WeakVH Object;
+			IrInputFunction Description;
+		};
+		IrCensusStatus Status = IrCensusStatus::Unmeasured;
+		IrObjectCounts InputCounts;
+		std::vector<InputObject> InputObjects;
+		std::vector<InputFunction> InputFunctions;
+
+	public:
+		void capture(Module& M);
+		ModuleIrCensusReport observe(const Module& M) const;
+	};
 
 	struct DifficultyComponents {
 		unsigned Insts = 0;
@@ -87,7 +161,9 @@ namespace llvm::obf {
 	struct ObfReportSink {
 		std::vector<FunctionReport> Functions;
 		bool ModuleTransformed = false;
+		ModuleIrCensus Census;
 
+		void beginModule(Module& M);
 		void add(FunctionReport&& R);
 
 		// Never invalidate: report is a side-channel sink.
