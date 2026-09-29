@@ -1,6 +1,7 @@
 #include "llvm/Transforms/Obfuscator/ObfReport.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
 
 #include "llvm/IR/CFG.h"
@@ -26,6 +27,103 @@ using namespace llvm;
 namespace llvm::obf {
 
 	void ObfReportSink::add(FunctionReport&& R) { Functions.push_back(std::move(R)); }
+
+	void IrObjectCounts::add(IrObjectKind Kind) {
+		switch (Kind) {
+		case IrObjectKind::Definition: ++Definitions; break;
+		case IrObjectKind::Declaration: ++Declarations; break;
+		case IrObjectKind::Instruction: ++Instructions; break;
+		case IrObjectKind::GlobalVariable: ++GlobalVariables; break;
+		case IrObjectKind::Alias: ++Aliases; break;
+		case IrObjectKind::IFunc: ++IFuncs; break;
+		}
+	}
+
+	void ModuleIrCensus::capture(Module& M) {
+		InputObjects.clear();
+		InputFunctions.clear();
+		InputCounts = {};
+		Status = IrCensusStatus::Measured;
+		auto Record = [&](Value& V, IrObjectKind Kind) {
+			InputObjects.push_back({WeakVH(&V), Kind});
+			InputCounts.add(Kind);
+		};
+		for (Function& F : M) {
+			IrInputFunction Description;
+			Description.Id = InputFunctions.size();
+			Description.Name = F.getName().str();
+			Description.Declaration = F.isDeclaration();
+			Record(F, F.isDeclaration() ? IrObjectKind::Declaration : IrObjectKind::Definition);
+			for (BasicBlock& BB : F)
+				for (Instruction& I : BB) {
+					Record(I, IrObjectKind::Instruction);
+					++Description.Instructions;
+				}
+			InputFunctions.push_back({WeakVH(&F), std::move(Description)});
+		}
+		for (GlobalVariable& G : M.globals()) Record(G, IrObjectKind::GlobalVariable);
+		for (GlobalAlias& G : M.aliases()) Record(G, IrObjectKind::Alias);
+		for (GlobalIFunc& G : M.ifuncs()) Record(G, IrObjectKind::IFunc);
+	}
+
+	ModuleIrCensusReport ModuleIrCensus::observe(const Module& M) const {
+		ModuleIrCensusReport Report;
+		if (Status == IrCensusStatus::Unmeasured) return Report;
+		Report.Status = IrCensusStatus::Measured;
+		Report.Input = InputCounts;
+		DenseSet<const Value*> OriginalObjects;
+		for (const InputObject& Input : InputObjects)
+			if (Value* V = Input.Object) OriginalObjects.insert(V);
+		DenseMap<const Value*, const IrInputFunction*> OriginalFunctions;
+		for (const InputFunction& Input : InputFunctions)
+			if (Value* V = Input.Object) OriginalFunctions[V] = &Input.Description;
+		DenseSet<const Value*> OutputObjects;
+		auto Record = [&](const Value& V, IrObjectKind Kind) {
+			OutputObjects.insert(&V);
+			Report.Output.add(Kind);
+			if (OriginalObjects.contains(&V)) Report.OutputInputObjects.add(Kind);
+			else Report.OutputCreatedOrRecreatedObjects.add(Kind);
+		};
+		for (const Function& F : M) {
+			IrOutputFunction Output;
+			Output.Name = F.getName().str();
+			Output.Declaration = F.isDeclaration();
+			if (auto It = OriginalFunctions.find(&F); It != OriginalFunctions.end()) {
+				Output.InputId = It->second->Id;
+				Output.Origin = It->second->Declaration
+					? IrFunctionOrigin::InputDeclarationObject : IrFunctionOrigin::InputDefinitionObject;
+			}
+			Record(F, F.isDeclaration() ? IrObjectKind::Declaration : IrObjectKind::Definition);
+			for (const BasicBlock& BB : F)
+				for (const Instruction& I : BB) {
+					Record(I, IrObjectKind::Instruction);
+					++Output.Instructions;
+					if (OriginalObjects.contains(&I)) ++Output.InputInstructionObjects;
+					else ++Output.CreatedOrRecreatedInstructionObjects;
+				}
+			Report.OutputFunctions.push_back(std::move(Output));
+		}
+		for (const GlobalVariable& G : M.globals()) Record(G, IrObjectKind::GlobalVariable);
+		for (const GlobalAlias& G : M.aliases()) Record(G, IrObjectKind::Alias);
+		for (const GlobalIFunc& G : M.ifuncs()) Record(G, IrObjectKind::IFunc);
+		for (const InputObject& Input : InputObjects) {
+			Value* V = Input.Object;
+			if (!V || !OutputObjects.contains(V)) Report.InputObjectsNotPresentInOutput.add(Input.Kind);
+		}
+		for (const InputFunction& Input : InputFunctions) {
+			IrInputFunction Description = Input.Description;
+			Value* V = Input.Object;
+			if (V && OutputObjects.contains(V)) Description.Disposition = IrInputDisposition::PresentInOutputModule;
+			Report.InputFunctions.push_back(std::move(Description));
+		}
+		return Report;
+	}
+
+	void ObfReportSink::beginModule(Module& M) {
+		Functions.clear();
+		ModuleTransformed = false;
+		Census.capture(M);
+	}
 
 	static double clamp01(double V) {
 		if (V < 0.0)
@@ -422,6 +520,95 @@ namespace llvm::obf {
 		return O;
 	}
 
+	static StringRef toString(IrCensusReason Reason) {
+		switch (Reason) {
+		case IrCensusReason::ModuleInputNotCaptured: return "module_input_not_captured";
+		case IrCensusReason::OriginalSiteAttributionUnavailable: return "original_site_attribution_unavailable";
+		case IrCensusReason::StringSelectionNotReported: return "string_selection_not_reported";
+		}
+		llvm_unreachable("The census reason must be supported.");
+	}
+
+	static StringRef toString(IrFunctionOrigin Origin) {
+		switch (Origin) {
+		case IrFunctionOrigin::InputDefinitionObject: return "input_definition_object";
+		case IrFunctionOrigin::InputDeclarationObject: return "input_declaration_object";
+		case IrFunctionOrigin::CreatedOrRecreatedObject: return "created_or_recreated_object";
+		}
+		llvm_unreachable("The function origin must be supported.");
+	}
+
+	static StringRef toString(IrInputDisposition Disposition) {
+		switch (Disposition) {
+		case IrInputDisposition::PresentInOutputModule: return "present_in_output_module";
+		case IrInputDisposition::NotPresentInOutputModule: return "not_present_in_output_module";
+		}
+		llvm_unreachable("The input disposition must be supported.");
+	}
+
+	static json::Object unmeasured(IrCensusReason Reason) {
+		return json::Object{{"status", "unmeasured"}, {"reason", toString(Reason)}};
+	}
+
+	static json::Object toJson(const IrObjectCounts& Counts) {
+		return json::Object{
+			{"definitions", (int64_t)Counts.Definitions},
+			{"declarations", (int64_t)Counts.Declarations},
+			{"instructions", (int64_t)Counts.Instructions},
+			{"global_variables", (int64_t)Counts.GlobalVariables},
+			{"aliases", (int64_t)Counts.Aliases},
+			{"ifuncs", (int64_t)Counts.IFuncs},
+		};
+	}
+
+	static json::Object toJson(const ModuleIrCensusReport& Report) {
+		json::Object Census;
+		Census["scope"] = "obfuscation_module_pipeline";
+		Census["original_site_transform_attribution"] = unmeasured(IrCensusReason::OriginalSiteAttributionUnavailable);
+		Census["module_string_coverage"] = unmeasured(IrCensusReason::StringSelectionNotReported);
+		if (Report.Status == IrCensusStatus::Unmeasured) {
+			Census["status"] = "unmeasured";
+			Census["reason"] = toString(IrCensusReason::ModuleInputNotCaptured);
+			return Census;
+		}
+		Census["status"] = "measured";
+		Census["identity_basis"] = "llvm_object_identity_without_rauw_following";
+		Census["input_boundary"] = "before_module_transforms";
+		Census["output_boundary"] = "after_module_pipeline";
+		Census["input"] = toJson(Report.Input);
+		Census["output"] = toJson(Report.Output);
+		Census["input_objects_not_present_in_output"] = toJson(Report.InputObjectsNotPresentInOutput);
+		Census["output_input_objects"] = toJson(Report.OutputInputObjects);
+		Census["output_created_or_recreated_objects"] = toJson(Report.OutputCreatedOrRecreatedObjects);
+		json::Array Inputs;
+		for (const IrInputFunction& Function : Report.InputFunctions) {
+			Inputs.push_back(json::Object{
+				{"id", (int64_t)Function.Id},
+				{"name", Function.Name},
+				{"declaration", Function.Declaration},
+				{"instructions", (int64_t)Function.Instructions},
+				{"disposition", toString(Function.Disposition)},
+			});
+		}
+		Census["input_functions"] = std::move(Inputs);
+		json::Array Outputs;
+		for (const IrOutputFunction& Function : Report.OutputFunctions) {
+			json::Object Output{
+				{"name", Function.Name},
+				{"declaration", Function.Declaration},
+				{"origin", toString(Function.Origin)},
+				{"instructions", (int64_t)Function.Instructions},
+				{"input_instruction_objects", (int64_t)Function.InputInstructionObjects},
+				{"created_or_recreated_instruction_objects", (int64_t)Function.CreatedOrRecreatedInstructionObjects},
+			};
+			if (Function.Origin != IrFunctionOrigin::CreatedOrRecreatedObject)
+				Output["input_id"] = (int64_t)Function.InputId;
+			Outputs.push_back(std::move(Output));
+		}
+		Census["output_functions"] = std::move(Outputs);
+		return Census;
+	}
+
 	Error maybeWriteObfReportJson(Module& M, ModuleAnalysisManager& MAM) {
 		std::string JsonPath = getReportJsonPath();
 		if (JsonPath.empty())
@@ -451,6 +638,7 @@ namespace llvm::obf {
 		if (!M.getDataLayoutStr().empty())
 			Mod["data_layout"] = M.getDataLayoutStr();
 		Mod["transformed"] = Sink.ModuleTransformed;
+		Mod["ir_census"] = toJson(Sink.Census.observe(M));
 		Root["module"] = std::move(Mod);
 
 		json::Array Funcs;

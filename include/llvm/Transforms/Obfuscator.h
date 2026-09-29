@@ -527,11 +527,11 @@ namespace llvm {
 		PreservedAnalyses run(Module& M, ModuleAnalysisManager& MAM) {
 			// Prime the report sink early so function passes can append via proxy.
 			if (llvm::obf::isReportEnabled())
-				(void)MAM.getResult<ObfReportAnalysis>(M);
+				MAM.getResult<ObfReportAnalysis>(M).beginModule(M);
 
 			auto& Cache = MAM.getResult<ObfuscationAnnotationAnalysis>(M);
 			if (!Cache.hasAnyConfig()) {
-				// If reporting is enabled, still emit an empty report for the module.
+				// If reporting is enabled, still emit a census without function-pass reports.
 				if (llvm::obf::isReportEnabled()) {
 					if (Error E = llvm::obf::maybeWriteObfReportJson(M, MAM))
 						errs() << "[obf] report: " << toString(std::move(E)) << "\n";
