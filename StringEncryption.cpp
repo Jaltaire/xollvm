@@ -102,6 +102,8 @@ namespace {
         Module& M,
         ArrayRef<std::string> Sensitive) {
         for (GlobalVariable& GV : M.globals()) {
+            if (!GV.hasInitializer())
+                continue;
             auto* Data = dyn_cast_or_null<ConstantDataArray>(GV.getInitializer());
             if (!Data || !Data->isString())
                 continue;
