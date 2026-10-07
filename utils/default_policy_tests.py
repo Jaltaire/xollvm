@@ -206,6 +206,24 @@ entry:
 }
 """
 
+SENSITIVE_POLICY_DECLARATION_IR = """
+target triple = "arm64-apple-macosx14.0.0"
+
+@declared_message = external global [16 x i8]
+@sensitive_message = private unnamed_addr constant [18 x i8] c"sensitive-marker!\\00"
+@ordinary_message = private unnamed_addr constant [17 x i8] c"ordinary-marker!\\00"
+
+declare i32 @puts(ptr)
+
+define i32 @main() {
+entry:
+  %sensitive_result = call i32 @puts(ptr @sensitive_message)
+  %ordinary_result = call i32 @puts(ptr @ordinary_message)
+  %declared_result = call i32 @puts(ptr @declared_message)
+  ret i32 0
+}
+"""
+
 MULTI_MODULE_IR = """
 target triple = "arm64-apple-macosx14.0.0"
 
@@ -361,6 +379,7 @@ class DefaultPolicyTests(unittest.TestCase):
         self,
         policy_text: str,
         specification: str = "constenc(prob=0)",
+        source_ir: str = SENSITIVE_POLICY_RUNTIME_IR,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             policy = Path(directory) / "sensitive.json"
@@ -371,7 +390,7 @@ class DefaultPolicyTests(unittest.TestCase):
                     "XOLLVM_DEFAULT_INCLUDE": "^main$",
                     "XOLLVM_SENSITIVE_STRINGS_FILE": str(policy),
                 },
-                source_ir=SENSITIVE_POLICY_RUNTIME_IR,
+                source_ir=source_ir,
             )
 
     def test_runtime_injection_interlocks_without_corrupting_abi_results(self) -> None:
@@ -682,6 +701,39 @@ entry:
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertIn("sensitive-marker!", process.stdout)
         self.assertIn("ordinary-marker!", process.stdout)
+
+    def test_sensitive_policy_skips_global_declarations(self) -> None:
+        process = self.run_sensitive_policy(
+            json.dumps(["sensitive-marker!"]),
+            source_ir=SENSITIVE_POLICY_DECLARATION_IR,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotIn("sensitive-marker!", process.stdout)
+        self.assertIn("ordinary-marker!", process.stdout)
+        self.assertIn("@declared_message = external global [16 x i8]", process.stdout)
+
+    def test_unmatched_sensitive_policy_skips_global_declarations(self) -> None:
+        process = self.run_sensitive_policy(
+            json.dumps(["absent-marker!"]),
+            source_ir=SENSITIVE_POLICY_DECLARATION_IR,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("sensitive-marker!", process.stdout)
+        self.assertIn("ordinary-marker!", process.stdout)
+        self.assertIn("@declared_message = external global [16 x i8]", process.stdout)
+
+    def test_a_module_with_a_global_declaration_and_no_sensitive_policy_is_left_unchanged(self) -> None:
+        process = self.run_opt(
+            {
+                "XOLLVM_DEFAULT_CONFIG": "constenc(prob=0)",
+                "XOLLVM_DEFAULT_INCLUDE": "^main$",
+            },
+            source_ir=SENSITIVE_POLICY_DECLARATION_IR,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("sensitive-marker!", process.stdout)
+        self.assertIn("ordinary-marker!", process.stdout)
+        self.assertIn("@declared_message = external global [16 x i8]", process.stdout)
 
     def test_unmatched_sensitive_policy_leaves_strings_unchanged(self) -> None:
         process = self.run_sensitive_policy(json.dumps(["absent-marker!"]))
