@@ -113,7 +113,8 @@ PreservedAnalyses RuntimeInjectionPass::run(Function& F, FunctionAnalysisManager
 
 	IRBuilder<> entryBuilder(&*F.getEntryBlock().getFirstInsertionPt());
 	Function* returnAddress = Intrinsic::getOrInsertDeclaration(
-		&module, Intrinsic::returnaddress);
+		&module, Intrinsic::returnaddress,
+		PointerType::get(llvmContext, 0), {Type::getInt32Ty(llvmContext)});
 	Value* callerPointer = entryBuilder.CreateCall(
 		returnAddress, {ConstantInt::get(Type::getInt32Ty(llvmContext), 0)});
 	Value* callerAddress = entryBuilder.CreatePtrToInt(callerPointer, i64);

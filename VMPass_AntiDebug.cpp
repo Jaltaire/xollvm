@@ -316,7 +316,7 @@ void VMImpl::buildAntiDebugGate(VMEngine::SharedState* SS) {
 		if (ObfVMAllowAntiDebugBypass) {
 			FunctionCallee GetEnv = M.getOrInsertFunction("getenv",
 				FunctionType::get(PtrTy, { PtrTy }, false));
-			Value* EnvName = B.CreateGlobalStringPtr(
+			Value* EnvName = B.CreateGlobalString(
 				"__OBF_DISABLE_ANTIDEBUG", "vm.ad.envname");
 			Value* EnvVal = B.CreateCall(GetEnv, { EnvName }, "vm.ad.env");
 			Value* EnvSet = B.CreateICmpNE(EnvVal,

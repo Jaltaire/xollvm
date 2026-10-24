@@ -143,7 +143,7 @@ namespace {
 				Reason = "blockaddress_target";
 				return false;
 			}
-			if (const Instruction* Term = BB.getTerminator()) {
+			if (const Instruction* Term = BB.getTerminatorOrNull()) {
 				if (isa<IndirectBrInst>(Term)) {
 					Reason = "indirectbr";
 					return false;

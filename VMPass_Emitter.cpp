@@ -252,7 +252,7 @@ uint32_t BytecodeEmitter::isize(Instruction* I) {
 		if (Ty->isFloatTy() || Ty->isDoubleTy()) return 7 + NA;  // OP_CALL_F
 		markUnsupported(I); return 0;
 	}
-	if (Op == Instruction::Br)
+	if (isa<BranchInst>(I))
 		return cast<BranchInst>(I)->isUnconditional() ? 5 : 10;
 
 	if (Op == Instruction::Switch) {
@@ -986,7 +986,7 @@ void BytecodeEmitter::emit(Instruction* I) {
 	}
 
 
-	if (Op == Instruction::Br) {
+	if (isa<BranchInst>(I)) {
 		auto* BI = cast<BranchInst>(I);
 		if (BI->isUnconditional()) {
 			bop(OP_JMP); fixup_u32(BI->getSuccessor(0));
