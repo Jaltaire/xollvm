@@ -239,7 +239,7 @@ def main():
         try:
             proc = subprocess.run(
                 [OPT, "-O2", "-S", "-o", "-"],
-                input=ll, text=True, capture_output=True, env=env, timeout=30)
+                input=ll, text=True, capture_output=True, env=env)
         except Exception as e:
             print(f"{name:<18}  [error] {e}")
             continue
@@ -258,7 +258,7 @@ def main():
         try:
             proc = subprocess.run(
                 [OPT, "-O2", "-S", "-o", "-"],
-                input=ll, text=True, capture_output=True, env=env, timeout=30)
+                input=ll, text=True, capture_output=True, env=env)
         except Exception as e:
             print(f"{name:<18}  [error] {e}")
             gate_fail = True

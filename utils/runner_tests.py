@@ -1,3 +1,5 @@
+import contextlib
+import io
 import subprocess
 import threading
 import unittest
@@ -9,6 +11,7 @@ from runner.targets import TARGETS
 from runner.config import Tools
 from cases._common import TestCase
 import default_policy_tests as policy
+import mba_fold_check as fold
 
 
 class ProcessTests(unittest.TestCase):
@@ -81,6 +84,16 @@ class ProcessTests(unittest.TestCase):
                 with mock.patch.object(util.subprocess, "run", side_effect=error):
                     with self.assertRaises(type(error)):
                         cross.exec_target(TARGETS["aarch64"], Path("program"), 0, 0)
+
+    def test_fold_resistance_commands_wait_for_completion(self):
+        result = subprocess.CompletedProcess("opt", 0, "ret i32 %input", "")
+        with mock.patch.object(fold.os.path, "isfile", return_value=True), mock.patch.object(
+            fold.subprocess, "run", return_value=result
+        ) as run, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(fold.main(), 0)
+        self.assertEqual(run.call_count, len(fold.IDENTITIES) + len(fold.ZERO_FORMS))
+        for call in run.call_args_list:
+            self.assertIsNone(call.kwargs.get("timeout"))
 
     def test_comparison_preserves_each_observable(self):
         baseline = (0, "answer\n", "diagnostic\n")
