@@ -1223,8 +1223,7 @@ def register(reg: Registry, **_opts) -> None:
                 + VM_SUPEROPS_GATES + VM_KEYEDDISP_GATES
                 + VM_BINDADEB_GATES + VM_THREADED_GATES,
             extra_opts=_DBG, category="vm",
-            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_max),
-            command_timeout=900)
+            src_override=render_vm_v7_multi_fn_aes_program(vm_v7_preset_max))
 
     reg.add(name="rt_vm_v7_preset_light_determinism", passes=["vm"],
             ann_override=vm_v7_preset_light,

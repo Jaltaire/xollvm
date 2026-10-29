@@ -29,7 +29,7 @@ def run_cmd(
     cwd: Path | None = None,
     capture: bool = True,
     verbose: bool = False,
-    timeout: int = 180,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     pretty = " ".join(_quote(a) for a in args)
     if verbose:
@@ -122,14 +122,11 @@ def count_all_instructions(ir: str) -> int:
 
 
 def exec_prog(exe: Path, x: int, y: int) -> tuple[int, str, str]:
-    try:
-        cp = subprocess.run(
-            [str(exe), str(x), str(y)],
-            text=True, capture_output=True, timeout=30,
-        )
-        return cp.returncode, cp.stdout, cp.stderr
-    except subprocess.TimeoutExpired:
-        return -999, "", "TIMEOUT"
+    cp = subprocess.run(
+        [str(exe), str(x), str(y)],
+        text=True, capture_output=True,
+    )
+    return cp.returncode, cp.stdout, cp.stderr
 
 
 def compare(base: tuple, obf: tuple) -> Optional[str]:

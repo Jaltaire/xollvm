@@ -12,6 +12,20 @@ The harness compiles small generated programs, runs baseline vs. obfuscated
 variants, compares results, and optionally verifies that the obfuscated IR
 survives a subsequent `-O2` pipeline without semantic changes.
 
+Host correctness executions and compiler commands wait for completion without
+per-process wall-clock budgets. Exit status, standard output, standard error,
+and IR gates determine correctness; scheduler delays do not. Execution errors
+propagate instead of becoming synthetic results that two failed runs could
+share. Any external hang guard should sit far beyond the complete workload.
+
+The default-policy suite uses fixed seeds, and its combined RASP and string
+encryption fixture always injects probes. A separately compiled test runtime
+implements every probe lane's challenge response and rejects mismatched
+interlocks. The test requires probe calls in the transformed entry point,
+correct output, encrypted strings, and the absence of unused AES key symbols.
+Run `python3 utils/runner_tests.py` from a standalone checkout to check the
+process and seeding contracts without building LLVM.
+
 ---
 
 ## Entry points

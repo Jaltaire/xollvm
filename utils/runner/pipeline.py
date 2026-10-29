@@ -66,7 +66,7 @@ def compile_src_to_ll(tools: Tools, src: Path, out: Path, *, is_cpp: bool, v: bo
 
 def compile_ll_to_exe(
     tools: Tools, ll: Path, exe: Path, opt: str, *, is_cpp: bool,
-    v: bool = False, timeout: int = 180,
+    v: bool = False, timeout: int | None = None,
 ) -> None:
     compiler = clang_for_lang(tools, is_cpp)
     extra = ["-std=c++17"] if is_cpp else []
@@ -79,7 +79,7 @@ def compile_ll_to_exe(
 
 def run_obfuscation(
     tools: Tools, base: Path, out: Path, seed: int,
-    extra: list[str] | None = None, v: bool = False, timeout: int = 180,
+    extra: list[str] | None = None, v: bool = False, timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [
         str(tools.opt),
@@ -151,7 +151,7 @@ def parse_dump_config_for_fn(
 
 
 def run_o2(
-    tools: Tools, src: Path, out: Path, v: bool = False, timeout: int = 180,
+    tools: Tools, src: Path, out: Path, v: bool = False, timeout: int | None = None,
 ) -> None:
     run_cmd(
         [str(tools.opt), "-passes=default<O2>", "-S", str(src), "-o", str(out)],
@@ -160,7 +160,7 @@ def run_o2(
     )
 
 
-def run_metrics(tools: Tools, ll: Path, func: str, timeout: int = 180) -> dict:
+def run_metrics(tools: Tools, ll: Path, func: str, timeout: int | None = None) -> dict:
     cp = run_cmd([
         str(tools.opt),
         "-disable-output",

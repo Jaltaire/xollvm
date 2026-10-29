@@ -11,6 +11,30 @@ import unittest
 from pathlib import Path
 
 
+TEST_SEED = 0xC0FFEE
+
+RASP_RUNTIME = """
+#include <stdint.h>
+#include <stdlib.h>
+
+static uint64_t response(uint64_t site, uint64_t challenge) {
+    uint64_t value = site ^ ((challenge << 17) | (challenge >> 47))
+        ^ UINT64_C(0x6a09e667f3bcc909);
+    value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+    return value ^ (value >> 31);
+}
+""" + "\n".join(
+    f"uint64_t obscura_rasp_probe_{lane}(uint64_t site, uint64_t challenge, uint64_t caller) {{"
+    " (void)caller; return response(site, challenge); }"
+    for lane in range(8)
+) + "\n" + "\n".join(
+    f"void obscura_rasp_interlock_{lane}(uint64_t site, uint64_t observed, uint64_t expected) {{"
+    " (void)site; if (observed != expected) abort(); }"
+    for lane in range(4)
+)
+
+
 IR = """
 target triple = "arm64-apple-macosx14.0.0"
 
@@ -346,7 +370,7 @@ class DefaultPolicyTests(unittest.TestCase):
     def run_opt(
         self,
         environment: dict[str, str],
-        arguments: tuple[str, ...] = (),
+        arguments: tuple[str, ...] = (f"--obf-seed={TEST_SEED}",),
         source_ir: str = IR,
     ) -> subprocess.CompletedProcess[str]:
         process_environment = self.process_environment(environment)
@@ -800,6 +824,8 @@ entry:
             "runtime-marker!\naddress-marker!\nescaped-marker!\n"
         ),
         extra_environment: dict[str, str] | None = None,
+        runtime_source: str | None = None,
+        required_main_ir: tuple[str, ...] = (),
     ) -> bytes:
         policy_environment = {
             "XOLLVM_DEFAULT_INCLUDE": "^main$",
@@ -816,7 +842,7 @@ entry:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "runtime.ll"
-            bitcode = root / "runtime.bc"
+            bitcode = root / "runtime.obfuscated.ll"
             object_file = root / "runtime.o"
             executable = root / "runtime"
             source.write_text(source_ir)
@@ -825,7 +851,9 @@ entry:
                     str(self.opt),
                     "-load-pass-plugin",
                     str(self.plugin),
+                    f"--obf-seed={TEST_SEED}",
                     "-passes=obfuscation",
+                    "-S",
                     str(source),
                     "-o",
                     str(bitcode),
@@ -835,6 +863,9 @@ entry:
                 text=True,
             )
             self.assertEqual(transformed.returncode, 0, transformed.stderr)
+            main = self.function_body(bitcode.read_text(), "main")
+            for required in required_main_ir:
+                self.assertIn(required, main)
             lowered = subprocess.run(
                 [
                     str(self.opt.parent / "llc"),
@@ -849,8 +880,13 @@ entry:
             self.assertEqual(lowered.returncode, 0, lowered.stderr)
             clang = shutil.which("clang")
             self.assertIsNotNone(clang)
+            runtime_inputs = []
+            if runtime_source is not None:
+                runtime = root / "rasp.c"
+                runtime.write_text(runtime_source)
+                runtime_inputs.append(str(runtime))
             compiled = subprocess.run(
-                [clang, str(object_file), "-o", str(executable)],
+                [clang, str(object_file), *runtime_inputs, "-o", str(executable)],
                 capture_output=True,
                 text=True,
             )
@@ -910,11 +946,29 @@ entry:
 
     def test_indirect_string_encryption_with_rasp_links_cleanly(self) -> None:
         executable = self.run_runtime_policy(
-            "rasp(prob=12,minInstructions=12,maxExitSites=2,maxBlockSites=3),"
-            "strenc(minlen=4,cipher=chacha)"
+            "rasp(prob=100,minInstructions=1,maxExitSites=2,maxBlockSites=3),"
+            "strenc(minlen=4,cipher=chacha)",
+            runtime_source=RASP_RUNTIME,
+            required_main_ir=(
+                "call i64 @obscura_rasp_probe_",
+                "call void @obscura_rasp_interlock_",
+            ),
         )
+        self.assertIn(b"obscura_rasp_probe_", executable)
+        self.assertIn(b"obscura_rasp_interlock_", executable)
+        self.assertNotIn(b"runtime-marker", executable)
+        self.assertNotIn(b"address-marker", executable)
+        self.assertNotIn(b"escaped-marker", executable)
         self.assertNotIn(b"__aes_key_a", executable)
         self.assertNotIn(b"__aes_key_b", executable)
+
+    def test_runtime_link_check_rejects_missing_rasp_injection(self) -> None:
+        with self.assertRaises(AssertionError):
+            self.run_runtime_policy(
+                "rasp(prob=0,minInstructions=1),strenc(minlen=4,cipher=chacha)",
+                runtime_source=RASP_RUNTIME,
+                required_main_ir=("call i64 @obscura_rasp_probe_",),
+            )
 
     def test_absent_environment_policy_leaves_functions_unchanged(self) -> None:
         process = self.run_opt({})
