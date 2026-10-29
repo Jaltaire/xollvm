@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from runner import pipeline, util
+from runner import cross, pipeline, util
+from runner.targets import TARGETS
 from runner.config import Tools
 from cases._common import TestCase
 import default_policy_tests as policy
@@ -27,6 +28,15 @@ class ProcessTests(unittest.TestCase):
                     self.assertEqual(seeds, [f"--obf-seed={expected}"])
 
     def test_execution_waits_for_completion_without_a_wall_clock_limit(self):
+        self.check_execution(util.exec_prog, ["program", "13", "29"])
+
+    def test_cross_execution_waits_for_completion_without_a_wall_clock_limit(self):
+        self.check_execution(
+            lambda exe, x, y: cross.exec_target(TARGETS["aarch64"], exe, x, y),
+            ["qemu-aarch64", "program", "13", "29"],
+        )
+
+    def check_execution(self, execute_program, expected_arguments):
         entered = threading.Event()
         release = threading.Event()
         completed = threading.Event()
@@ -41,7 +51,7 @@ class ProcessTests(unittest.TestCase):
             return subprocess.CompletedProcess(arguments, 7, "answer\n", "diagnostic\n")
 
         def execute():
-            results.append(util.exec_prog(Path("program"), 13, 29))
+            results.append(execute_program(Path("program"), 13, 29))
             completed.set()
 
         with mock.patch.object(util.subprocess, "run", side_effect=run):
@@ -55,7 +65,7 @@ class ProcessTests(unittest.TestCase):
                 release.set()
                 worker.join(600)
             self.assertFalse(worker.is_alive())
-        self.assertEqual(calls[0][0], ["program", "13", "29"])
+        self.assertEqual(calls[0][0], expected_arguments)
         self.assertEqual(results, [(7, "answer\n", "diagnostic\n")])
 
     def test_execution_errors_cannot_become_comparable_program_results(self):
@@ -64,6 +74,13 @@ class ProcessTests(unittest.TestCase):
                 with mock.patch.object(util.subprocess, "run", side_effect=error):
                     with self.assertRaises(type(error)):
                         util.exec_prog(Path("program"), 0, 0)
+
+    def test_cross_execution_errors_cannot_become_comparable_program_results(self):
+        for error in [OSError("The emulator is missing."), subprocess.TimeoutExpired("emulator", 30)]:
+            with self.subTest(error=type(error).__name__):
+                with mock.patch.object(util.subprocess, "run", side_effect=error):
+                    with self.assertRaises(type(error)):
+                        cross.exec_target(TARGETS["aarch64"], Path("program"), 0, 0)
 
     def test_comparison_preserves_each_observable(self):
         baseline = (0, "answer\n", "diagnostic\n")

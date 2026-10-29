@@ -12,7 +12,7 @@ The harness compiles small generated programs, runs baseline vs. obfuscated
 variants, compares results, and optionally verifies that the obfuscated IR
 survives a subsequent `-O2` pipeline without semantic changes.
 
-Host correctness executions and compiler commands wait for completion without
+Host and QEMU correctness executions and compiler commands wait for completion without
 per-process wall-clock budgets. Exit status, standard output, standard error,
 and IR gates determine correctness; scheduler delays do not. Execution errors
 propagate instead of becoming synthetic results that two failed runs could

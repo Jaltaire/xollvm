@@ -121,9 +121,9 @@ def count_all_instructions(ir: str) -> int:
     return count
 
 
-def exec_prog(exe: Path, x: int, y: int) -> tuple[int, str, str]:
+def exec_prog(exe: Path, x: int, y: int, *, launcher: tuple[str, ...] = ()) -> tuple[int, str, str]:
     cp = subprocess.run(
-        [str(exe), str(x), str(y)],
+        [*launcher, str(exe), str(x), str(y)],
         text=True, capture_output=True,
     )
     return cp.returncode, cp.stdout, cp.stderr

@@ -7,13 +7,12 @@ binary. exec_target runs it via qemu-user and captures stdout for compare.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 from .config import Tools
 from .targets import Target
-from .util import run_cmd
+from .util import exec_prog, run_cmd
 
 
 def build_for_target(
@@ -43,17 +42,9 @@ def build_for_target(
             verbose=verbose)
 
 
-def exec_target(target: Target, exe: Path, x: int, y: int,
-                timeout: int = 30) -> tuple[int, str, str]:
+def exec_target(target: Target, exe: Path, x: int, y: int) -> tuple[int, str, str]:
     """Run a target binary under qemu-user; same shape as runner.util.exec_prog."""
-    try:
-        cp = subprocess.run(
-            [target.qemu_bin, str(exe), str(x), str(y)],
-            text=True, capture_output=True, timeout=timeout,
-        )
-        return cp.returncode, cp.stdout, cp.stderr
-    except subprocess.TimeoutExpired:
-        return -999, "", "TIMEOUT"
+    return exec_prog(exe, x, y, launcher=(target.qemu_bin,))
 
 
 def compare(base: tuple, obf: tuple) -> Optional[str]:
